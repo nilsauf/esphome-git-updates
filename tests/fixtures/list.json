@@ -1,0 +1,255 @@
+{
+ "source": "Captured from Device Builder 1.26.0 / ESPHome 2026.10.1 (local pip install, not the HA add-on) on 2026-10-31. devices/list with three configurations.",
+ "frames": [
+  {
+   "dir": "in",
+   "frame": {
+    "server_version": "1.26.0",
+    "esphome_version": "2026.10.1",
+    "port": 16052,
+    "ha_addon": false,
+    "friendly_name": "evo",
+    "ha_ingress": false,
+    "requires_auth": false,
+    "desktop_version": "",
+    "desktop_update_capable": false,
+    "in_docker": false
+   }
+  },
+  {
+   "dir": "out",
+   "frame": {
+    "command": "devices/list",
+    "message_id": "1",
+    "args": {}
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "1",
+    "result": {
+     "configured": [
+      {
+       "name": "broken-node",
+       "friendly_name": "broken-node",
+       "configuration": "broken-node.yaml",
+       "comment": null,
+       "area": "",
+       "board_id": "",
+       "target_platform": "host",
+       "address": "broken-node.local",
+       "ip": "",
+       "web_port": null,
+       "current_version": "2026.10.1",
+       "expected_config_hash": "32e744ee",
+       "loaded_integrations": [
+        "esphome",
+        "host",
+        "logger",
+        "mdns",
+        "network",
+        "preferences",
+        "sensor",
+        "template"
+       ],
+       "loaded_platforms": [
+        "sensor.template"
+       ],
+       "directly_referenced_integrations": [
+        "esphome",
+        "host",
+        "logger",
+        "sensor",
+        "template"
+       ],
+       "runtime_state": {
+        "state": "unknown",
+        "active_source": "unknown",
+        "ip_addresses": [],
+        "deployed_version": "",
+        "deployed_config_hash": "",
+        "network": "",
+        "queued_update": false,
+        "api_encryption_active": null,
+        "deployed_identity_live": false,
+        "ota_signed": false,
+        "offline_seconds": null
+       },
+       "has_pending_changes": true,
+       "pending_changes_via_hash": false,
+       "update_available": false,
+       "migration_available": false,
+       "uses_mqtt": false,
+       "uses_deep_sleep": false,
+       "name_add_mac_suffix": false,
+       "mdns_disabled": false,
+       "api_enabled": false,
+       "api_encrypted": false,
+       "ota_encryption_required": false,
+       "mac_address": "",
+       "ethernet_mac": "",
+       "bluetooth_mac": "",
+       "build_size_bytes": 713417,
+       "labels": [],
+       "logger_baud_rate": null,
+       "logger_interface": null,
+       "mcu": null,
+       "bootloader": null,
+       "ota_partition_access": false,
+       "ota_signing_key": false
+      },
+      {
+       "name": "host-node",
+       "friendly_name": "host-node",
+       "configuration": "host-node.yaml",
+       "comment": null,
+       "area": "",
+       "board_id": "",
+       "target_platform": "host",
+       "address": "host-node.local",
+       "ip": "",
+       "web_port": null,
+       "current_version": "2026.10.1",
+       "expected_config_hash": "2c07736d",
+       "loaded_integrations": [
+        "api",
+        "esphome",
+        "host",
+        "logger",
+        "md5",
+        "mdns",
+        "network",
+        "ota",
+        "preferences",
+        "safe_mode",
+        "sha256",
+        "socket"
+       ],
+       "loaded_platforms": [
+        "ota.esphome"
+       ],
+       "directly_referenced_integrations": [
+        "api",
+        "esphome",
+        "host",
+        "logger",
+        "ota"
+       ],
+       "runtime_state": {
+        "state": "unknown",
+        "active_source": "unknown",
+        "ip_addresses": [],
+        "deployed_version": "",
+        "deployed_config_hash": "",
+        "network": "",
+        "queued_update": false,
+        "api_encryption_active": null,
+        "deployed_identity_live": false,
+        "ota_signed": false,
+        "offline_seconds": null
+       },
+       "has_pending_changes": true,
+       "pending_changes_via_hash": false,
+       "update_available": false,
+       "migration_available": false,
+       "uses_mqtt": false,
+       "uses_deep_sleep": false,
+       "name_add_mac_suffix": false,
+       "mdns_disabled": false,
+       "api_enabled": true,
+       "api_encrypted": false,
+       "ota_encryption_required": false,
+       "mac_address": "",
+       "ethernet_mac": "",
+       "bluetooth_mac": "",
+       "build_size_bytes": 86249847,
+       "labels": [],
+       "logger_baud_rate": null,
+       "logger_interface": null,
+       "mcu": null,
+       "bootloader": null,
+       "ota_partition_access": false,
+       "ota_signing_key": false
+      },
+      {
+       "name": "offline-node",
+       "friendly_name": "offline-node",
+       "configuration": "offline-node.yaml",
+       "comment": null,
+       "area": "",
+       "board_id": "esp32dev",
+       "target_platform": "esp32",
+       "address": "192.0.2.10",
+       "ip": "192.0.2.10",
+       "web_port": null,
+       "current_version": "2026.10.1",
+       "expected_config_hash": "2080f29c",
+       "loaded_integrations": [
+        "esp32",
+        "esphome",
+        "logger",
+        "md5",
+        "mdns",
+        "network",
+        "ota",
+        "preferences",
+        "safe_mode",
+        "sha256",
+        "socket",
+        "watchdog",
+        "wifi"
+       ],
+       "loaded_platforms": [
+        "ota.esphome"
+       ],
+       "directly_referenced_integrations": [
+        "esp32",
+        "esphome",
+        "logger",
+        "ota",
+        "wifi"
+       ],
+       "runtime_state": {
+        "state": "unknown",
+        "active_source": "unknown",
+        "ip_addresses": [],
+        "deployed_version": "",
+        "deployed_config_hash": "",
+        "network": "",
+        "queued_update": false,
+        "api_encryption_active": null,
+        "deployed_identity_live": false,
+        "ota_signed": false,
+        "offline_seconds": null
+       },
+       "has_pending_changes": true,
+       "pending_changes_via_hash": false,
+       "update_available": false,
+       "migration_available": false,
+       "uses_mqtt": false,
+       "uses_deep_sleep": false,
+       "name_add_mac_suffix": false,
+       "mdns_disabled": false,
+       "api_enabled": false,
+       "api_encrypted": false,
+       "ota_encryption_required": false,
+       "mac_address": "",
+       "ethernet_mac": "",
+       "bluetooth_mac": "",
+       "build_size_bytes": 1165431,
+       "labels": [],
+       "logger_baud_rate": null,
+       "logger_interface": "UART0",
+       "mcu": null,
+       "bootloader": null,
+       "ota_partition_access": false,
+       "ota_signing_key": false
+      }
+     ],
+     "importable": []
+    }
+   }
+  }
+ ]
+}

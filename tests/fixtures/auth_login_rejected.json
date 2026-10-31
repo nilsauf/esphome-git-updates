@@ -1,0 +1,39 @@
+{
+ "source": "Captured from Device Builder 1.26.0 / ESPHome 2026.10.1 (local pip install, not the HA add-on) on 2026-10-31. Password-protected builder, wrong password.",
+ "frames": [
+  {
+   "dir": "in",
+   "frame": {
+    "server_version": "1.26.0",
+    "esphome_version": "2026.10.1",
+    "port": 16053,
+    "ha_addon": false,
+    "friendly_name": "",
+    "ha_ingress": false,
+    "requires_auth": true,
+    "desktop_version": "",
+    "desktop_update_capable": false,
+    "in_docker": false
+   }
+  },
+  {
+   "dir": "out",
+   "frame": {
+    "command": "auth/login",
+    "message_id": "1",
+    "args": {
+     "username": "REDACTED",
+     "password": "REDACTED"
+    }
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "1",
+    "error_code": "not_authenticated",
+    "details": "Invalid credentials"
+   }
+  }
+ ]
+}

@@ -1,0 +1,647 @@
+{
+ "source": "Captured from Device Builder 1.26.0 / ESPHome 2026.10.1 (local pip install, not the HA add-on) on 2026-10-31. install host-node.yaml --port 127.0.0.1: compile succeeds, OTA upload is refused (nothing listening).",
+ "frames": [
+  {
+   "dir": "in",
+   "frame": {
+    "server_version": "1.26.0",
+    "esphome_version": "2026.10.1",
+    "port": 16052,
+    "ha_addon": false,
+    "friendly_name": "evo",
+    "ha_ingress": false,
+    "requires_auth": false,
+    "desktop_version": "",
+    "desktop_update_capable": false,
+    "in_docker": false
+   }
+  },
+  {
+   "dir": "out",
+   "frame": {
+    "command": "firmware/install",
+    "message_id": "1",
+    "args": {
+     "configuration": "host-node.yaml",
+     "port": "127.0.0.1"
+    }
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "1",
+    "result": {
+     "job_id": "08bff2c840c2",
+     "configuration": "host-node.yaml",
+     "job_type": "compile",
+     "status": "running",
+     "created_at": "2026-10-31T21:29:30.258654+00:00",
+     "started_at": "2026-10-31T21:29:30.259000+00:00",
+     "completed_at": null,
+     "compile_started_at": null,
+     "compile_ended_at": null,
+     "exit_code": null,
+     "output": [],
+     "error": null,
+     "port": "",
+     "flash_bootloader": false,
+     "skip_bootloader": true,
+     "is_deferred_install": false,
+     "new_name": "",
+     "depends_on": "",
+     "dependency_released": false,
+     "progress": null,
+     "remote_peer": "",
+     "remote_job_id": "",
+     "remote_peer_label": "",
+     "device_name": "",
+     "device_friendly_name": "",
+     "source": "local",
+     "source_pin_sha256": "",
+     "source_label": "",
+     "source_esphome_version": "",
+     "target_esphome_version": "",
+     "failure_reason": ""
+    }
+   }
+  },
+  {
+   "dir": "out",
+   "frame": {
+    "command": "firmware/get_jobs",
+    "message_id": "2",
+    "args": {
+     "configuration": "host-node.yaml"
+    }
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "2",
+    "result": [
+     {
+      "job_id": "c2587b836fe5",
+      "configuration": "host-node.yaml",
+      "job_type": "upload",
+      "status": "queued",
+      "created_at": "2026-10-31T21:29:30.258703+00:00",
+      "started_at": null,
+      "completed_at": null,
+      "compile_started_at": null,
+      "compile_ended_at": null,
+      "exit_code": null,
+      "output": [],
+      "error": null,
+      "port": "127.0.0.1",
+      "flash_bootloader": false,
+      "skip_bootloader": false,
+      "is_deferred_install": false,
+      "new_name": "",
+      "depends_on": "08bff2c840c2",
+      "dependency_released": false,
+      "progress": null,
+      "remote_peer": "",
+      "remote_job_id": "",
+      "remote_peer_label": "",
+      "device_name": "",
+      "device_friendly_name": "",
+      "source": "local",
+      "source_pin_sha256": "",
+      "source_label": "",
+      "source_esphome_version": "",
+      "target_esphome_version": "",
+      "failure_reason": ""
+     },
+     {
+      "job_id": "08bff2c840c2",
+      "configuration": "host-node.yaml",
+      "job_type": "compile",
+      "status": "running",
+      "created_at": "2026-10-31T21:29:30.258654+00:00",
+      "started_at": "2026-10-31T21:29:30.259000+00:00",
+      "completed_at": null,
+      "compile_started_at": null,
+      "compile_ended_at": null,
+      "exit_code": null,
+      "output": [],
+      "error": null,
+      "port": "",
+      "flash_bootloader": false,
+      "skip_bootloader": true,
+      "is_deferred_install": false,
+      "new_name": "",
+      "depends_on": "",
+      "dependency_released": false,
+      "progress": null,
+      "remote_peer": "",
+      "remote_job_id": "",
+      "remote_peer_label": "",
+      "device_name": "",
+      "device_friendly_name": "",
+      "source": "local",
+      "source_pin_sha256": "",
+      "source_label": "",
+      "source_esphome_version": "",
+      "target_esphome_version": "",
+      "failure_reason": ""
+     },
+     {
+      "job_id": "1133d9c16bf1",
+      "configuration": "host-node.yaml",
+      "job_type": "compile",
+      "status": "failed",
+      "created_at": "2026-10-31T21:27:32.376710+00:00",
+      "started_at": "2026-10-31T21:27:32.377112+00:00",
+      "completed_at": "2026-10-31T21:27:35.355988+00:00",
+      "compile_started_at": "2026-10-31T21:27:32.651461+00:00",
+      "compile_ended_at": "2026-10-31T21:27:35.294251+00:00",
+      "exit_code": 1,
+      "output": [],
+      "error": null,
+      "port": "",
+      "flash_bootloader": false,
+      "skip_bootloader": true,
+      "is_deferred_install": true,
+      "new_name": "",
+      "depends_on": "",
+      "dependency_released": false,
+      "progress": null,
+      "remote_peer": "",
+      "remote_job_id": "",
+      "remote_peer_label": "",
+      "device_name": "",
+      "device_friendly_name": "",
+      "source": "local",
+      "source_pin_sha256": "",
+      "source_label": "",
+      "source_esphome_version": "",
+      "target_esphome_version": "",
+      "failure_reason": ""
+     }
+    ]
+   }
+  },
+  {
+   "dir": "out",
+   "frame": {
+    "command": "firmware/follow_job",
+    "message_id": "3",
+    "args": {
+     "job_id": "08bff2c840c2"
+    }
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "\\033[32mINFO ESPHome 2026.10.1\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "\\033[32mINFO Reading configuration /config/host-node.yaml...\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "\\033[32mINFO Generating C++ source...\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "\\033[32mINFO Compiling app... Build path: /config/.esphome/build/host-node\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "\\033[32mINFO Compiling with a precompiled header (set ESPHOME_PCH_ENABLE=0 to disable)\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[1/31] CXX obj/src/esphome/components/ota/ota_backend.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[2/31] CXX obj/src/esphome/components/logger/logger_host.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[3/31] CXX obj/src/esphome/components/network/util.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[4/31] CXX obj/src/esphome/components/network/network_component.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[5/31] CXX obj/src/esphome/components/sha256/sha256.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[6/31] CXX obj/src/esphome/components/logger/task_log_buffer_host.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[7/31] CXX obj/src/esphome/components/socket/bsd_sockets_impl.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[8/31] CXX obj/src/esphome/components/mdns/mdns_host.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[9/31] CXX obj/src/esphome/components/ota/ota_backend_host.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[10/31] CXX obj/src/esphome/core/application.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[11/31] CXX obj/src/esphome/components/mdns/mdns_component.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[12/31] CXX obj/src/esphome/components/logger/logger.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[13/31] CXX obj/src/esphome/core/build_info_data.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[14/31] CXX obj/src/esphome/components/socket/socket.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[15/31] CXX obj/src/esphome/core/color.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[16/31] CXX obj/src/esphome/components/safe_mode/safe_mode.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[17/31] CXX obj/src/esphome/components/esphome/ota/ota_esphome_inflate_session.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[18/31] CXX obj/src/esphome/components/esphome/ota/ota_esphome.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[19/31] CXX obj/src/esphome/components/md5/md5.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[20/31] CXX obj/src/esphome/core/gpio.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[21/31] CXX obj/src/esphome/core/component.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[22/31] CXX obj/src/esphome/core/entity_base.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[23/31] CXX obj/src/esphome/core/log.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[24/31] CXX obj/src/esphome/core/wake/wake_host.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[25/31] CXX obj/src/esphome/core/component_iterator.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[26/31] CXX obj/src/esphome/core/alloc_helpers.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[27/31] CXX obj/src/esphome/core/time.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[28/31] CXX obj/src/esphome/core/scheduler.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[29/31] CXX obj/src/esphome/core/helpers.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[30/31] CXX obj/src/main.cpp.o\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "[31/31] LINK program\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "\\033[32mINFO Build Info: config_hash=0x2c07736d build_time_str=2026-10-31 22:27:26 +0100\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "output",
+    "data": "\\033[32mINFO Successfully compiled program to path '/config/.esphome/build/host-node/.pioenvs/host-node/program'\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "event": "result",
+    "data": {
+     "status": "completed",
+     "exit_code": 0,
+     "error": null,
+     "queued_update_armed": false
+    }
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "result": null
+   }
+  },
+  {
+   "dir": "out",
+   "frame": {
+    "command": "firmware/follow_job",
+    "message_id": "4",
+    "args": {
+     "job_id": "c2587b836fe5"
+    }
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "event": "output",
+    "data": "\\033[32mINFO ESPHome 2026.10.1\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "event": "output",
+    "data": "\\033[32mINFO Loaded validated config cache for host-node.yaml, skipping validation.\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "event": "output",
+    "data": "\\033[32mINFO Connecting to 127.0.0.1 port 13232...\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "event": "output",
+    "data": "\\033[33mWARNING Connecting to 127.0.0.1 port 13232 failed: [Errno 111] Connection refused\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "event": "output",
+    "data": "\\033[32mINFO Retrying in 5 seconds (attempt 2 of 3)...\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "event": "output",
+    "data": "\\033[32mINFO Connecting to 127.0.0.1 port 13232...\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "event": "output",
+    "data": "\\033[33mWARNING Connecting to 127.0.0.1 port 13232 failed: [Errno 111] Connection refused\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "event": "output",
+    "data": "\\033[32mINFO Retrying in 5 seconds (attempt 3 of 3)...\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "event": "output",
+    "data": "\\033[32mINFO Connecting to 127.0.0.1 port 13232...\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "event": "output",
+    "data": "\\033[33mWARNING Connecting to 127.0.0.1 port 13232 failed: [Errno 111] Connection refused\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "event": "output",
+    "data": "\\033[31mERROR Upload failed after 3 attempts: connecting to 127.0.0.1 failed: [Errno 111] Connection refused\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "event": "output",
+    "data": "\\033[33mWARNING Failed to upload to ['127.0.0.1']\\033[0m\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "event": "result",
+    "data": {
+     "status": "failed",
+     "exit_code": 1,
+     "error": null,
+     "queued_update_armed": false
+    }
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "result": null
+   }
+  }
+ ]
+}
