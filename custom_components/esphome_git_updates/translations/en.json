@@ -1,0 +1,46 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Device Builder",
+        "description": "Where the ESPHome Device Builder runs.",
+        "data": {
+          "url": "URL",
+          "username": "Username",
+          "password": "Password"
+        },
+        "data_description": {
+          "url": "The Device Builder's base URL, for example http://192.168.1.10:6052.",
+          "username": "Only needed if the Device Builder asks for a login.",
+          "password": "Only needed if the Device Builder asks for a login."
+        }
+      },
+      "configuration": {
+        "title": "Tracked Config",
+        "description": "The ESPHome configuration to watch for updates.",
+        "data": {
+          "configuration": "Configuration"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the Device Builder.",
+      "invalid_auth": "The Device Builder refused the username or password.",
+      "unsupported_version": "This Device Builder version is not supported."
+    },
+    "abort": {
+      "already_configured": "This configuration is already tracked.",
+      "no_configurations": "The Device Builder has no configurations."
+    }
+  },
+  "issues": {
+    "unsupported_server_version": {
+      "title": "Unsupported Device Builder for {title}",
+      "description": "The Device Builder that compiles {title} reports version {server_version}, which ESPHome Git Updates does not support. Updates for {title} are paused until the Device Builder runs a supported version or this integration is updated."
+    },
+    "unexpected_frame": {
+      "title": "Unexpected answer from the Device Builder for {title}",
+      "description": "The Device Builder that compiles {title} sent something ESPHome Git Updates does not understand, so updates for {title} are paused. This usually means the Device Builder changed its protocol. Details: {error}"
+    }
+  }
+}

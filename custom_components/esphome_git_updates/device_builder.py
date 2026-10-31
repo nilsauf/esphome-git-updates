@@ -31,6 +31,16 @@ OutputCallback = Callable[[str, str], None]
 # frame received; the CLI's --record uses it to capture test fixtures.
 Recorder = Callable[[str, Any], None]
 
+# Message types that mean the websocket is gone.
+_CLOSED_TYPES = frozenset(
+    {
+        aiohttp.WSMsgType.CLOSE,
+        aiohttp.WSMsgType.CLOSING,
+        aiohttp.WSMsgType.CLOSED,
+        aiohttp.WSMsgType.ERROR,
+    }
+)
+
 # PEP 440-style versions as published on PyPI: 1.26.0, 1.26.1b5, 1.26.1rc2.
 _VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)((?:a|b|rc)\d+)?")
 
@@ -319,12 +329,7 @@ class DeviceBuilderClient:
         """Yield every frame received for *message_id*; raise on anything else."""
         while True:
             msg = await self._ws.receive()
-            if msg.type in (
-                aiohttp.WSMsgType.CLOSE,
-                aiohttp.WSMsgType.CLOSING,
-                aiohttp.WSMsgType.CLOSED,
-                aiohttp.WSMsgType.ERROR,
-            ):
+            if msg.type in _CLOSED_TYPES:
                 raise ConnectionLost(f"websocket closed ({msg.type.name})")
             if msg.type != aiohttp.WSMsgType.TEXT:
                 raise UnexpectedFrame(f"{msg.type.name} message", msg.data)
@@ -383,10 +388,15 @@ async def connect(
     origins, and non-browser clients authenticate in-band instead.
     """
     async with session.ws_connect(url.rstrip("/") + "/ws", heartbeat=30) as ws:
+        msg = await ws.receive()
+        if msg.type in _CLOSED_TYPES:
+            raise ConnectionLost(f"websocket closed before the handshake ({msg.type.name})")
+        if msg.type != aiohttp.WSMsgType.TEXT:
+            raise UnexpectedFrame("expected server info on connect", msg.data)
         try:
-            handshake = await ws.receive_json()
-        except (TypeError, ValueError) as err:
-            raise UnexpectedFrame("expected server info on connect") from err
+            handshake = msg.json()
+        except ValueError as err:
+            raise UnexpectedFrame("expected server info on connect", msg.data) from err
         if recorder is not None:
             recorder("in", handshake)
         info = _check_server_info(handshake)

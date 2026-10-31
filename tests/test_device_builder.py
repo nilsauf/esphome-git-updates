@@ -47,6 +47,14 @@ async def test_connect_rejects_a_handshake_that_is_not_server_info() -> None:
                     pass
 
 
+async def test_a_connection_dropped_before_the_handshake_is_a_lost_connection() -> None:
+    async with serve([{"dir": "close"}]) as (url, _):
+        async with aiohttp.ClientSession() as session:
+            with pytest.raises(device_builder.ConnectionLost):
+                async with device_builder.connect(session, url):
+                    pass
+
+
 def _device(configuration: str, name: str, friendly_name: str) -> dict[str, object]:
     return {"name": name, "friendly_name": friendly_name, "configuration": configuration,
             "target_platform": "esp32", "address": f"{name}.local"}
