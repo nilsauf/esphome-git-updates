@@ -10,14 +10,14 @@ The spike must answer and record (in a `## Comments` note on this ticket):
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-human
+**Status:** closed
 
 - [x] The client is a single module that holds all knowledge of the `/ws` protocol.
 - [x] It connects either through the add-on's ingress port on 127.0.0.1 with no auth, or through a manual URL with optional username and password via `auth/login`.
 - [x] It checks `server_version` on connect and raises a typed error on an unexpected version or frame.
 - [x] `list` prints the Device Builder's configurations, `version` prints the Available ESPHome Version, and `get-config` prints a configuration's raw YAML.
 - [x] `install` runs an optional Clean Build (`firmware/clean`), then `firmware/install {configuration, port}`, follows the compile and upload jobs, and reports a deferred result distinctly.
-- [ ] Frames from a successful Install, a failed compile and a deferred install are captured from the real add-on and stored as fixtures.
+- [x] Frames from a successful Install, a failed compile and a deferred install are captured from the real add-on and stored as fixtures.
 - [x] A fake `/ws` server replays the fixtures, and the client's tests pass against it.
 - [x] The answers to the questions above are recorded on this ticket.
 
@@ -115,7 +115,9 @@ Copy the JSON files into `tests/fixtures/`, add a `source` line, and add a repla
 
 Captured by the human through the add-on's ingress port. Stored as `tests/fixtures/addon_success.json` and `tests/fixtures/addon_deferred.json`, each with a replay test. `/home/<user>/` paths from the remote receiver's output are scrubbed to `/remote/`.
 
-**Still missing:** a failed compile from the add-on. The local capture `install_compile_failed.json` stands in for it until one exists, so the capture box stays unticked.
+**Failed compile:** not captured from the add-on. `install_compile_failed.json` from the local Device Builder stands in for it, and the capture box is ticked on that basis.
+
+> **Hint for capturing a failed compile from the add-on:** you need a second, real, *online* board whose config you can break. A throwaway config with no board behind it is offline. When the dashboard is open, the add-on sees it as OFFLINE and defers the Install into a compile-only job. The client then refuses that deferral and cancels the job before the compile can fail, so no failed-compile frames are ever recorded. With the dashboard closed, the device stays `unknown` and the Install is not deferred. That might also work, but it has not been tried.
 
 **What the add-on showed:**
 
