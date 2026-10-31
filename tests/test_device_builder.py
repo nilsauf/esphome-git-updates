@@ -377,3 +377,24 @@ async def test_a_compile_that_arms_a_queued_update_is_refused_as_deferred() -> N
     assert fake.finished and fake.mismatches == []
     assert result.outcome is device_builder.InstallOutcome.DEFERRED
     assert result.error == "device offline"
+
+
+# --- Replays of transcripts captured from the real HA add-on (Device Builder 1.25.0) ---
+
+
+async def test_addon_successful_clean_install() -> None:
+    result, output, _ = await _install(
+        "addon_success", configuration="b2500.yaml", clean_build=True
+    )
+    assert result.outcome is device_builder.InstallOutcome.COMPLETED
+    assert [(job.stage, job.status, job.exit_code) for job in result.jobs] == [
+        ("clean", "completed", 0), ("compile", "completed", 0), ("upload", "completed", 0),
+    ]
+    assert {stage for stage, _ in output} == {"clean", "compile", "upload"}
+
+
+async def test_addon_install_on_an_offline_device_is_refused_as_deferred() -> None:
+    result, _, _ = await _install("addon_deferred", configuration="offline.yaml")
+    assert result.outcome is device_builder.InstallOutcome.DEFERRED
+    [job] = result.jobs
+    assert (job.stage, job.status, job.queued_update_armed) == ("compile", "cancelled", False)

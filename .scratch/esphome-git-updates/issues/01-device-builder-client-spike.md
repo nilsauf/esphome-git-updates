@@ -110,3 +110,19 @@ python3 scripts/device_builder_cli.py --addon-port $PORT --record addon_deferred
 ```
 
 Copy the JSON files into `tests/fixtures/`, add a `source` line, and add a replay test for each, following the `test_captured_*` tests. If the add-on's frames differ from the local ones, record the difference here.
+
+### 2026-10-31: captures from the real add-on
+
+Captured by the human through the add-on's ingress port. Stored as `tests/fixtures/addon_success.json` and `tests/fixtures/addon_deferred.json`, each with a replay test. `/home/<user>/` paths from the remote receiver's output are scrubbed to `/remote/`.
+
+**Still missing:** a failed compile from the add-on. The local capture `install_compile_failed.json` stands in for it until one exists, so the capture box stays unticked.
+
+**What the add-on showed:**
+
+- **Version:** `server_version` 1.25.0, ESPHome 2026.10.1. The client's floor was lowered to 1.25.0 in the amended spike commit, after diffing the 1.25.0 and 1.26.0 wheels.
+- **Ingress needs no auth (confirmed):** the handshake on the ingress port says `requires_auth: false`, `ha_addon: true`, `ha_ingress: false`. `ha_ingress` is only `true` behind the Supervisor proxy, not on the port itself.
+- **Successful Install:** the frames match the local capture exactly. `firmware/clean` and `follow_job`, then `firmware/install`, then `get_jobs`, which finds the upload through `depends_on`, then `follow_job` for the compile and for the upload. All three stages ended `completed`, exit 0.
+- **Deferred Install:** the same shape as locally. `is_deferred_install: true`, `port: ""`, no upload job. Cancel and clear worked, and following the job shows `cancelled`, `queued_update_armed: false`.
+- **Remote builds:** this add-on is paired with remote build servers (`evo`, `esphome_cloud.lan`). The compile jobs have `source: "remote"`, while clean and upload ran locally (`source: "local"`). The client needs no change for this, because jobs are followed the same way either way.
+
+**Open for ticket 03:** with a remote compile, does `firmware/clean` (which wipes the add-on's local build directory) still give a clean compile? Each remote build runs in a fresh `.remote_builds/<id>/` bundle directory, which suggests yes, but that is unverified.

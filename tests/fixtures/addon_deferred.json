@@ -1,0 +1,142 @@
+{
+ "source": "Captured from the real Home Assistant ESPHome add-on (Device Builder 1.25.0, ESPHome 2026.10.1) through its ingress port on 2026-10-31. The add-on is paired with remote build servers, so the compile ran on a receiver; /home/<user>/esphome paths in its output are scrubbed to /remote/esphome. install offline.yaml while the device was unplugged and shown OFFLINE: firmware/install returns a compile-only job with is_deferred_install=true; the client cancels it, clears the queued update and follows it to `cancelled`.",
+ "frames": [
+  {
+   "dir": "in",
+   "frame": {
+    "server_version": "1.25.0",
+    "esphome_version": "2026.10.1",
+    "port": 6052,
+    "ha_addon": true,
+    "friendly_name": "5c53de3b-esphome",
+    "ha_ingress": false,
+    "requires_auth": false,
+    "desktop_version": "",
+    "desktop_update_capable": false,
+    "in_docker": true
+   }
+  },
+  {
+   "dir": "out",
+   "frame": {
+    "command": "firmware/install",
+    "message_id": "1",
+    "args": {
+     "configuration": "offline.yaml",
+     "port": "OTA"
+    }
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "1",
+    "result": {
+     "job_id": "61afc755bf52",
+     "configuration": "offline.yaml",
+     "job_type": "compile",
+     "status": "running",
+     "created_at": "2026-10-31T22:34:59.139544+00:00",
+     "started_at": "2026-10-31T22:34:59.140445+00:00",
+     "completed_at": null,
+     "compile_started_at": null,
+     "compile_ended_at": null,
+     "exit_code": null,
+     "output": [],
+     "error": null,
+     "port": "",
+     "flash_bootloader": false,
+     "skip_bootloader": true,
+     "is_deferred_install": true,
+     "new_name": "",
+     "depends_on": "",
+     "dependency_released": false,
+     "progress": null,
+     "remote_peer": "",
+     "remote_job_id": "",
+     "remote_peer_label": "",
+     "device_name": "",
+     "device_friendly_name": "",
+     "source": "remote",
+     "source_pin_sha256": "5c6eab22ef3778abec05fe7352a94ed0fc93a37f355965e62a9fbe3b4a54cedb",
+     "source_label": "evo",
+     "source_esphome_version": "",
+     "target_esphome_version": "",
+     "failure_reason": ""
+    }
+   }
+  },
+  {
+   "dir": "out",
+   "frame": {
+    "command": "firmware/cancel",
+    "message_id": "2",
+    "args": {
+     "job_id": "61afc755bf52"
+    }
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "2",
+    "result": null
+   }
+  },
+  {
+   "dir": "out",
+   "frame": {
+    "command": "firmware/clear_queued_update",
+    "message_id": "3",
+    "args": {
+     "configuration": "offline.yaml"
+    }
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "3",
+    "result": null
+   }
+  },
+  {
+   "dir": "out",
+   "frame": {
+    "command": "firmware/follow_job",
+    "message_id": "4",
+    "args": {
+     "job_id": "61afc755bf52"
+    }
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "event": "output",
+    "data": "*** building configuration bundle for remote build ***\n"
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "event": "result",
+    "data": {
+     "status": "cancelled",
+     "exit_code": null,
+     "error": null,
+     "queued_update_armed": false
+    }
+   }
+  },
+  {
+   "dir": "in",
+   "frame": {
+    "message_id": "4",
+    "result": null
+   }
+  }
+ ]
+}
