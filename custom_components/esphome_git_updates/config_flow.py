@@ -6,7 +6,12 @@ from __future__ import annotations
 from typing import Any
 
 import probatio
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.const import CONF_DEVICE_ID, CONF_PASSWORD, CONF_URL, CONF_USERNAME
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.hassio import is_hassio
@@ -14,6 +19,9 @@ from homeassistant.helpers.selector import (
     DeviceFilterSelectorConfig,
     DeviceSelector,
     DeviceSelectorConfig,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -31,6 +39,14 @@ from .device_builder import (
     UnsupportedServerVersion,
 )
 from .location import CONF_ADDON_SLUG, DEFAULT_ADDON_SLUG, DeviceBuilderNotFound
+from .options import (
+    CONF_CLEAN_BUILD,
+    CONF_GIT_POLL_INTERVAL,
+    CONF_UPLOAD_ADDRESS,
+    DEFAULT_CLEAN_BUILD,
+    DEFAULT_GIT_POLL_INTERVAL,
+    DEFAULT_UPLOAD_ADDRESS,
+)
 
 ADDON_SCHEMA = probatio.Schema(
     {probatio.Required(CONF_ADDON_SLUG, default=DEFAULT_ADDON_SLUG): str}
@@ -46,11 +62,28 @@ MANUAL_SCHEMA = probatio.Schema(
     }
 )
 
+OPTIONS_SCHEMA = probatio.Schema(
+    {
+        probatio.Required(CONF_CLEAN_BUILD, default=DEFAULT_CLEAN_BUILD): bool,
+        probatio.Required(CONF_GIT_POLL_INTERVAL, default=DEFAULT_GIT_POLL_INTERVAL): NumberSelector(
+            NumberSelectorConfig(
+                min=1, step=1, unit_of_measurement="min", mode=NumberSelectorMode.BOX
+            )
+        ),
+        probatio.Required(CONF_UPLOAD_ADDRESS, default=DEFAULT_UPLOAD_ADDRESS): str,
+    }
+)
+
 
 class EsphomeGitUpdatesConfigFlow(ConfigFlow, domain=DOMAIN):
     """One config entry per Tracked Config."""
 
     VERSION = 1
+
+    @staticmethod
+    def async_get_options_flow(config_entry: ConfigEntry) -> EsphomeGitUpdatesOptionsFlow:
+        """The options of a Tracked Config: Clean Build, git poll interval, upload address."""
+        return EsphomeGitUpdatesOptionsFlow()
 
     def __init__(self) -> None:
         self._location: dict[str, str] = {}
@@ -186,3 +219,26 @@ class EsphomeGitUpdatesConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _list_configurations(self, location: dict[str, Any]) -> list[Configuration]:
         async with connect_to_device_builder(self.hass, location) as client:
             return await client.list_configurations()
+
+
+class EsphomeGitUpdatesOptionsFlow(OptionsFlow):
+    """Clean Build, the git poll interval and the upload address of a Tracked Config."""
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Show the options, filled in with the ones set."""
+        if user_input is not None:
+            return self.async_create_entry(
+                data={
+                    **user_input,
+                    # The number selector gives a float; the interval is whole minutes.
+                    CONF_GIT_POLL_INTERVAL: int(user_input[CONF_GIT_POLL_INTERVAL]),
+                    CONF_UPLOAD_ADDRESS: user_input[CONF_UPLOAD_ADDRESS].strip()
+                    or DEFAULT_UPLOAD_ADDRESS,
+                }
+            )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=self.add_suggested_values_to_schema(
+                OPTIONS_SCHEMA, self.config_entry.options
+            ),
+        )

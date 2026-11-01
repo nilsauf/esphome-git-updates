@@ -60,6 +60,23 @@
       "no_configurations": "The Device Builder has no configurations."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Install and polling options",
+        "data": {
+          "clean_build": "Clean Build",
+          "git_poll_interval": "Git poll interval",
+          "upload_address": "Upload address"
+        },
+        "data_description": {
+          "clean_build": "Delete the build directory, locally and on connected remote build servers, before each compile. It does not fetch Git Sources again: that takes `refresh: always` in the YAML.",
+          "git_poll_interval": "How often, in minutes, the YAML is read again and each Git Source's latest commit is fetched.",
+          "upload_address": "Where to upload the firmware. OTA uploads over the air to the device's own address; give an IP address or hostname to upload there instead."
+        }
+      }
+    }
+  },
   "issues": {
     "unsupported_server_version": {
       "title": "Unsupported Device Builder for {title}",

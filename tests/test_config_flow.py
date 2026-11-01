@@ -272,3 +272,60 @@ async def test_a_device_of_another_integration_is_refused(hass: HomeAssistant) -
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"device_id": "not_linkable_device"}
+
+
+async def _options_form(hass: HomeAssistant) -> tuple[MockConfigEntry, ConfigFlowResult]:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="host-node",
+        unique_id="host-node.yaml",
+        data={"url": "http://esphome.lan:6052", "configuration": "host-node.yaml"},
+    )
+    entry.add_to_hass(hass)
+    return await _options_form_of(hass, entry)
+
+
+async def test_the_options_default_to_no_clean_build_a_30_minute_git_poll_and_ota(
+    hass: HomeAssistant,
+) -> None:
+    entry, result = await _options_form(hass)
+
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == {"clean_build": False, "git_poll_interval": 30, "upload_address": "OTA"}
+
+
+async def test_the_options_can_be_changed_and_are_shown_again_as_set(
+    hass: HomeAssistant,
+) -> None:
+    entry, result = await _options_form(hass)
+    chosen = {"clean_build": True, "git_poll_interval": 5, "upload_address": "192.168.1.42"}
+
+    result = await hass.config_entries.options.async_configure(result["flow_id"], chosen)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == chosen
+
+    _, result = await _options_form_of(hass, entry)
+    schema = result["data_schema"]
+    assert schema is not None
+    assert {str(key): key.description["suggested_value"] for key in schema.schema} == chosen
+
+
+async def test_a_blank_upload_address_is_saved_as_ota(hass: HomeAssistant) -> None:
+    entry, result = await _options_form(hass)
+
+    await hass.config_entries.options.async_configure(
+        result["flow_id"], {"clean_build": False, "git_poll_interval": 30, "upload_address": "  "}
+    )
+
+    assert entry.options["upload_address"] == "OTA"
+
+
+async def _options_form_of(
+    hass: HomeAssistant, entry: MockConfigEntry
+) -> tuple[MockConfigEntry, ConfigFlowResult]:
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+    return entry, result

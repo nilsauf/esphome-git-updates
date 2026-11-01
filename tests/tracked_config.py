@@ -6,6 +6,7 @@ Shared by the tests that run the integration with Git Sources.
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
 from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
@@ -20,13 +21,21 @@ CONFIGURATION = "host-node.yaml"
 OTA = "ota:\n  - platform: esphome\n"
 
 
-async def set_up(hass: HomeAssistant, fake: FakeDeviceBuilder, **data: str) -> MockConfigEntry:
-    """Set up the entry `tracked` for CONFIGURATION on *fake*, with any further *data*."""
+async def set_up(
+    hass: HomeAssistant,
+    fake: FakeDeviceBuilder,
+    *,
+    options: dict[str, Any] | None = None,
+    **data: str,
+) -> MockConfigEntry:
+    """Set up the entry `tracked` for CONFIGURATION on *fake*, with any further *data*
+    and its *options*."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="host-node",
         unique_id=CONFIGURATION,
         data={"url": fake.url, "configuration": CONFIGURATION, **data},
+        options=options or {},
         entry_id="tracked",
     )
     entry.add_to_hass(hass)

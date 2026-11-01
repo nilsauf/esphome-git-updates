@@ -6,7 +6,14 @@ import aiohttp
 import pytest
 
 import device_builder
-from fake_device_builder import FakeDeviceBuilder, load_fixture, server_info, serve
+from fake_device_builder import (
+    FakeDeviceBuilder,
+    Transcript,
+    load_fixture,
+    server_info,
+    serve,
+    with_clean_jobs,
+)
 
 
 async def test_connect_reads_server_info() -> None:
@@ -226,9 +233,11 @@ async def test_a_recorder_captures_a_transcript_the_fake_server_can_replay() -> 
     assert recorded == transcript
 
 
-async def _install(name: str, **kwargs: object) -> tuple[device_builder.InstallResult, list[tuple[str, str]], FakeDeviceBuilder]:
+async def _install(fixture: str | Transcript, **kwargs: object) -> tuple[device_builder.InstallResult, list[tuple[str, str]], FakeDeviceBuilder]:
+    """Install against the fixture named *fixture*, or against a transcript."""
     output: list[tuple[str, str]] = []
-    async with serve(load_fixture(name)) as (url, fake):
+    transcript = load_fixture(fixture) if isinstance(fixture, str) else fixture
+    async with serve(transcript) as (url, fake):
         async with aiohttp.ClientSession() as session:
             async with device_builder.connect(session, url) as client:
                 result = await client.install(
@@ -313,7 +322,7 @@ async def test_captured_login_with_a_wrong_password() -> None:
 
 async def test_captured_successful_clean_install() -> None:
     result, output, _ = await _install(
-        "install_clean_success", configuration="host-node.yaml", port="127.0.0.1", clean_build=True
+        with_clean_jobs(load_fixture("install_clean_success")), configuration="host-node.yaml", port="127.0.0.1", clean_build=True
     )
     assert result.outcome is device_builder.InstallOutcome.COMPLETED
     assert result.error is None
@@ -391,14 +400,44 @@ async def test_a_compile_that_arms_a_queued_update_is_refused_as_deferred() -> N
 
 
 async def test_addon_successful_clean_install() -> None:
+    # The add-on is paired with two remote build servers, so `firmware/clean`
+    # queued a clean job for each of them besides the local one.
+    remote = {"84dcb8482426": "completed", "bef9160385f1": "completed"}
     result, output, _ = await _install(
-        "addon_success", configuration="b2500.yaml", clean_build=True
+        with_clean_jobs(load_fixture("addon_success"), remote),
+        configuration="b2500.yaml", clean_build=True,
     )
     assert result.outcome is device_builder.InstallOutcome.COMPLETED
-    assert [(job.stage, job.status, job.exit_code) for job in result.jobs] == [
-        ("clean", "completed", 0), ("compile", "completed", 0), ("upload", "completed", 0),
+    assert [(job.job_id, job.stage, job.status) for job in result.jobs] == [
+        ("e9cfd4b2b27c", "clean", "completed"),
+        ("84dcb8482426", "clean", "completed"),
+        ("bef9160385f1", "clean", "completed"),
+        ("3f1da4fb8667", "compile", "completed"),
+        ("d57f9bbbbc5e", "upload", "completed"),
     ]
     assert {stage for stage, _ in output} == {"clean", "compile", "upload"}
+
+
+async def test_a_remote_clean_that_fails_fails_the_install_before_it_compiles() -> None:
+    remote = {"84dcb8482426": "completed", "bef9160385f1": "failed"}
+    result, _, _ = await _install(
+        with_clean_jobs(load_fixture("addon_success"), remote),
+        configuration="b2500.yaml", clean_build=True,
+    )
+    assert result.outcome is device_builder.InstallOutcome.FAILED
+    assert result.stage == "clean"
+    assert result.jobs[-1].job_id == "bef9160385f1"
+
+
+async def test_a_remote_clean_that_failed_before_the_jobs_were_listed_still_fails_the_install() -> None:
+    remote = {"84dcb8482426": "completed", "bef9160385f1": "failed"}
+    result, _, _ = await _install(
+        with_clean_jobs(load_fixture("addon_success"), remote, ended=("bef9160385f1",)),
+        configuration="b2500.yaml", clean_build=True,
+    )
+    assert result.outcome is device_builder.InstallOutcome.FAILED
+    assert result.stage == "clean"
+    assert result.jobs[-1].job_id == "bef9160385f1"
 
 
 async def test_addon_install_on_an_offline_device_is_refused_as_deferred() -> None:
@@ -448,7 +487,7 @@ async def test_install_reports_the_jobs_still_to_follow_before_following_each() 
         reported.append(jobs)
 
     await _install(
-        "install_clean_success", configuration="host-node.yaml", port="127.0.0.1",
+        with_clean_jobs(load_fixture("install_clean_success")), configuration="host-node.yaml", port="127.0.0.1",
         clean_build=True, on_jobs=on_jobs,
     )
     ActiveJob = device_builder.ActiveJob

@@ -44,6 +44,7 @@ from .install_log import (
     InstallLog,
 )
 from .linked_device import LinkedDevice
+from .options import Options
 from .versions import SourceCommits, Versions
 
 _LOGGER = logging.getLogger(__name__)
@@ -168,15 +169,21 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         output stays in the Device Builder, nothing is written to /config.
         """
         configuration = self._entry.data[CONF_CONFIGURATION]
+        options = Options.of(self._entry.options)
         await self._check_before_install()
         # What gets recorded is what the check just read, not what the remote
         # holds once the build is done: a push during the build stays an update.
         commits = self._git.latest_commits()
         task = self._start(
             commits,
-            "compile",
+            options.upload_address,
+            "clean" if options.clean_build else "compile",
             lambda client, log, on_jobs: client.install(
-                configuration, on_output=log, on_jobs=on_jobs
+                configuration,
+                port=options.upload_address,
+                clean_build=options.clean_build,
+                on_output=log,
+                on_jobs=on_jobs,
             ),
             reattached=False,
         )
@@ -216,15 +223,22 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         configuration = self._entry.data[CONF_CONFIGURATION]
         self._start(
             active.commits,
+            active.port,
             active.jobs[0].stage,
             lambda client, log, on_jobs: client.resume_install(
-                configuration, active.jobs, on_output=log, on_jobs=on_jobs
+                configuration, active.jobs, port=active.port, on_output=log, on_jobs=on_jobs
             ),
             reattached=True,
         )
 
     def _start(
-        self, commits: Mapping[str, str], stage: str, run: _StartJobs, *, reattached: bool
+        self,
+        commits: Mapping[str, str],
+        port: str,
+        stage: str,
+        run: _StartJobs,
+        *,
+        reattached: bool,
     ) -> asyncio.Task[None]:
         """Run an Install as a task of the entry.
 
@@ -235,16 +249,21 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         self.async_write_ha_state()
         return self._entry.async_create_background_task(
             self.hass,
-            self._install(commits, stage, run, reattached),
+            self._install(commits, port, stage, run, reattached),
             f"{DOMAIN} install {self._entry.title}",
         )
 
     async def _install(
-        self, commits: Mapping[str, str], stage: str, run: _StartJobs, reattached: bool
+        self,
+        commits: Mapping[str, str],
+        port: str,
+        stage: str,
+        run: _StartJobs,
+        reattached: bool,
     ) -> None:
         cancelled = False
         try:
-            await self._follow_install(commits, stage, run, reattached)
+            await self._follow_install(commits, port, stage, run, reattached)
         except asyncio.CancelledError:
             # It stays in progress, and is re-attached on the next setup.
             cancelled = True
@@ -259,12 +278,17 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
                 self.async_write_ha_state()
 
     async def _follow_install(
-        self, commits: Mapping[str, str], stage: str, run: _StartJobs, reattached: bool
+        self,
+        commits: Mapping[str, str],
+        port: str,
+        stage: str,
+        run: _StartJobs,
+        reattached: bool,
     ) -> None:
         log = InstallLog()
 
         async def on_jobs(jobs: tuple[ActiveJob, ...]) -> None:
-            await self._store.async_set_active_install(ActiveInstall(jobs, commits))
+            await self._store.async_set_active_install(ActiveInstall(jobs, commits, port))
 
         try:
             async with connect_to_device_builder(

@@ -65,7 +65,7 @@ One update run for a Tracked Config: an optional Clean Build step, then compile,
 _Avoid_: build, flash, update (when meaning the run)
 
 **Clean Build**:
-An Install that first wipes the Tracked Config's build directory; it does not re-fetch Git Sources.
+An Install that first wipes the Tracked Config's build directory, locally and on every connected remote build server; it does not re-fetch Git Sources.
 _Avoid_: fresh build, rebuild
 
 **Deferred Install**:

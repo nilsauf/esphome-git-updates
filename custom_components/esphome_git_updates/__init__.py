@@ -17,6 +17,7 @@ from .coordinator import (
 )
 from .git_coordinator import GitSourcesCoordinator
 from .linked_device import LinkedDevice
+from .options import Options
 from .pre_install import missing_ota_issue_id, refresh_policy_issue_id
 
 PLATFORMS = [Platform.UPDATE]
@@ -38,11 +39,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: EsphomeGitUpdatesConfigE
     linked_device = LinkedDevice.of(hass, entry)
     git_coordinator = GitSourcesCoordinator(hass, entry, store, issue)
     # Not a first refresh: Git Sources that cannot be read must not hold up
-    # the ESPHome update. The poller logs why and tries again in 30 min.
+    # the ESPHome update. The poller logs why and tries again at its next poll.
     await git_coordinator.async_refresh()
     entry.runtime_data = RuntimeData(coordinator, git_coordinator, store, linked_device)
+    # Not reloaded on an options change: that would interrupt a running Install.
+    # Clean Build and the upload address are read when Install is pressed.
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+async def _async_options_updated(
+    hass: HomeAssistant, entry: EsphomeGitUpdatesConfigEntry
+) -> None:
+    """Apply changed options to what runs; Clean Build and the upload address are
+    read anew at each Install."""
+    await entry.runtime_data.git_coordinator.async_set_poll_interval(
+        Options.of(entry.options).git_poll_interval
+    )
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: EsphomeGitUpdatesConfigEntry) -> bool:

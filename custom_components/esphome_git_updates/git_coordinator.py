@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .connection import CONNECTION_ERRORS, connect_to_device_builder
-from .const import CONF_CONFIGURATION, DOMAIN, GIT_POLL_INTERVAL
+from .const import CONF_CONFIGURATION, DOMAIN
 from .coordinator import (
     EsphomeGitUpdatesConfigEntry,
     ProtocolIssue,
@@ -32,6 +33,7 @@ from .git_sources import (
     Reader,
     discover_git_sources,
 )
+from .options import Options
 from .pre_install import PreInstallCheck, PreInstallIssues
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,7 +88,7 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
             _LOGGER,
             config_entry=entry,
             name=f"{DOMAIN} {entry.title} git sources",
-            update_interval=GIT_POLL_INTERVAL,
+            update_interval=Options.of(entry.options).git_poll_interval,
         )
         self._store = store
         self._issue = issue
@@ -150,6 +152,17 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
             )
         if (refusal := check.refusal(title)) is not None:
             raise HomeAssistantError(refusal)
+
+    async def async_set_poll_interval(self, interval: timedelta) -> None:
+        """Poll every *interval* from now on, starting with a poll right away.
+
+        The poll already scheduled would otherwise still come after the old
+        interval; a refresh schedules the next one after the new interval.
+        """
+        if interval == self.update_interval:
+            return
+        self.update_interval = interval
+        await self.async_refresh()
 
     def latest_commits(self) -> dict[str, str]:
         """The Latest Commit last seen of each tracked Git Source, by key."""

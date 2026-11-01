@@ -88,6 +88,39 @@ async def test_a_push_is_offered_as_an_update_at_the_next_30_minute_poll(
     )
 
 
+async def test_a_changed_git_poll_interval_takes_effect_without_a_restart(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    marsrelay: GitRepo,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    entry = await set_up(hass, builder)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"], {"clean_build": False, "git_poll_interval": 5, "upload_address": "OTA"}
+    )
+    await hass.async_block_till_done()
+    pushed = marsrelay.push()
+
+    await tick(hass, freezer, 5.1)
+
+    assert _state(hass).attributes["latest_version"] == f"2026.10.1 (marsrelay {pushed[:7]})"
+
+
+async def test_a_git_poll_interval_set_before_setup_is_used_from_the_start(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    marsrelay: GitRepo,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    await set_up(hass, builder, options={"git_poll_interval": 10})
+    pushed = marsrelay.push()
+
+    await tick(hass, freezer, 10.1)
+
+    assert _state(hass).attributes["latest_version"] == f"2026.10.1 (marsrelay {pushed[:7]})"
+
+
 def _installed_commits(hass_storage: dict[str, Any]) -> dict[str, str]:
     commits: dict[str, str] = hass_storage[f"{DOMAIN}.tracked"]["data"]["installed_commits"]
     return commits

@@ -36,7 +36,7 @@ A HACS custom integration (`esphome_git_updates`, "ESPHome Git Updates") that re
 ## Install
 
 1. **Check before compiling:** refuse with a clear error if the YAML has no `ota:` platform `esphome`/`web_server` (Repair issue), or if a tracked Git Source lacks `refresh: always`/`0s` (Repair issue, ADR-0004).
-2. If Clean Build is on, run `firmware/clean` and follow it.
+2. If Clean Build is on, run `firmware/clean`, then follow it and the clean jobs it fans out to remote build servers (found with `firmware/get_jobs`). `firmware/install` cancels any still running.
 3. Run `firmware/install {configuration, port}`, then follow the compile job and then the upload job.
 4. **Device offline:** the integration never does a Deferred Install.
    - **Before compiling:** with a Linked Device whose entities are all unavailable, refuse with "device offline" before starting any job.

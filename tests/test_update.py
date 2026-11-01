@@ -263,16 +263,17 @@ async def test_removing_the_entry_drops_its_repair_issue_and_stored_versions(
 
 
 async def _set_up_with_an_update(
-    hass: HomeAssistant, url: str, hass_storage: dict[str, Any]
+    hass: HomeAssistant, url: str, hass_storage: dict[str, Any], **options: Any
 ) -> MockConfigEntry:
-    """An entry whose device runs 2026.10.0 while the Device Builder has 2026.10.1."""
+    """An entry with *options* whose device runs 2026.10.0 while the Device Builder
+    has 2026.10.1."""
     entry_id = "tracked"
     hass_storage[f"{DOMAIN}.{entry_id}"] = {
         "version": 1,
         "key": f"{DOMAIN}.{entry_id}",
         "data": {"installed_esphome_version": "2026.10.0"},
     }
-    entry = await _set_up(hass, url, entry_id=entry_id)
+    entry = await _set_up(hass, url, entry_id=entry_id, options=options)
     assert hass.states.get(ENTITY_ID).state == STATE_ON  # type: ignore[union-attr]
     return entry
 
@@ -553,12 +554,12 @@ async def test_an_upload_that_fails_for_another_reason_is_not_called_unreachable
 
 
 
-def _queue_install(compile_id: str, upload_id: str) -> Transcript:
-    """The Device Builder's side of an Install, up to following its jobs."""
+def _queue_install(compile_id: str, upload_id: str, *, port: str = "OTA") -> Transcript:
+    """The Device Builder's side of an Install uploading to *port*, up to following its jobs."""
     return [
         server_info(esphome_version="2026.10.1"),
         {"dir": "out", "frame": {"command": "firmware/install", "message_id": "1",
-                                 "args": {"configuration": "host-node.yaml", "port": "OTA"}}},
+                                 "args": {"configuration": "host-node.yaml", "port": port}}},
         {"dir": "in", "frame": {"message_id": "1", "result": {
             "job_id": compile_id, "job_type": "compile", "is_deferred_install": False}}},
         {"dir": "out", "frame": {"command": "firmware/get_jobs", "message_id": "2",
@@ -736,3 +737,94 @@ async def test_a_fresh_install_whose_job_vanishes_fails_without_claiming_a_resta
     [notification] = _notifications(hass)
     assert "Install failed" in str(notification["title"])
     assert "restarted" not in notification["message"]
+
+
+async def test_with_clean_build_on_an_install_cleans_before_it_compiles(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url, hass_storage, clean_build=True)
+    # The transcript expects `firmware/clean`, then the clean followed, then
+    # `firmware/install`: any other order is a mismatch.
+    fake.transcript = install_transcript("install_clean_success", clean={})
+
+    await _install(hass)
+
+    assert fake.mismatches == []
+    assert fake.finished
+    assert _recorded_version(hass_storage, entry) == "2026.10.1"
+    assert _notifications(hass) == []
+
+
+async def test_a_clean_build_that_fails_notifies_with_the_clean_stage_and_records_nothing(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url, hass_storage, clean_build=True)
+    # A remote build server's clean fails; the Install stops before compiling.
+    fake.transcript = install_transcript("install_clean_success", clean={"k2": "failed"})
+
+    with pytest.raises(HomeAssistantError, match="failed at clean"):
+        await _install(hass)
+
+    assert fake.mismatches == []
+    assert _recorded_version(hass_storage, entry) == "2026.10.0"
+    [notification] = _notifications(hass)
+    assert "Install failed at stage **clean**" in notification["message"]
+
+
+async def test_the_upload_address_override_is_the_install_port(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url, hass_storage, upload_address="192.168.1.42")
+    fake.transcript = install_transcript("install_clean_success", port="192.168.1.42")
+
+    await _install(hass)
+
+    assert fake.mismatches == []
+    assert fake.finished
+    assert _recorded_version(hass_storage, entry) == "2026.10.1"
+
+
+async def test_an_install_re_attached_during_its_clean_build_uploads_where_it_was_started_for(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    entry_id = "tracked"
+    hass_storage[f"{DOMAIN}.{entry_id}"] = {
+        "version": 1,
+        "key": f"{DOMAIN}.{entry_id}",
+        "data": {
+            "installed_esphome_version": "2026.10.0",
+            "active_install": {
+                "jobs": [{"job_id": "k1", "stage": "clean"}],
+                "commits": {},
+                "port": "192.168.1.42",
+            },
+        },
+    }
+    fake.transcript = [
+        server_info(esphome_version="2026.10.1"),
+        {"dir": "out", "frame": {"command": "firmware/follow_job", "message_id": "k",
+                                 "args": {"job_id": "k1"}}},
+        *({"dir": "in", "frame": {"message_id": "k", **event}} for event in job_events("Done")),
+        {"dir": "in", "frame": {"message_id": "k", "result": None}},
+        *_queue_install("c1", "u1", port="192.168.1.42")[1:],
+    ]
+    fake.jobs = {"c1": job_events("INFO Compiling"), "u1": job_events("INFO OTA successful")}
+
+    # The upload address was changed while Home Assistant was down.
+    entry = await _set_up(hass, url, entry_id=entry_id, options={"upload_address": "10.0.0.9"})
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert fake.mismatches == []
+    assert _recorded_version(hass_storage, entry) == "2026.10.1"

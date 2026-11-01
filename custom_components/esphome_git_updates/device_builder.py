@@ -11,8 +11,9 @@ import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Final
 
 import aiohttp
 
@@ -184,6 +185,10 @@ class _InstallRun:
         return InstallResult(outcome, self.results[-1].stage, tuple(self.results))
 
 
+# The `port` of `firmware/install` that uploads over the air to the device's own address.
+OTA: Final = "OTA"
+
+
 def is_supported_server_version(server_version: str) -> bool:
     match = _VERSION.fullmatch(server_version)
     if match is None:
@@ -245,7 +250,7 @@ class DeviceBuilderClient:
         self,
         configuration: str,
         *,
-        port: str = "OTA",
+        port: str = OTA,
         clean_build: bool = False,
         on_output: OutputCallback | None = None,
         on_jobs: JobsCallback | None = None,
@@ -268,15 +273,44 @@ class DeviceBuilderClient:
         run = _InstallRun(configuration, port, on_output, on_jobs)
         if clean_build:
             clean = await self._command("firmware/clean", configuration=configuration)
-            return await self._follow(run, (ActiveJob(_job_id(clean), "clean"),))
+            return await self._follow(run, await self._clean_jobs(configuration, clean))
         return await self._compile_and_upload(run)
+
+    async def _clean_jobs(
+        self, configuration: str, local: dict[str, Any]
+    ) -> tuple[ActiveJob, ...]:
+        """The *local* clean job, then the clean jobs it fanned out to remote build servers.
+
+        `firmware/clean` returns only the local job, but also queues one clean per
+        connected remote build server, right after it. `firmware/install` cancels
+        every job still active for the configuration, so these must end before it
+        is sent, or the remote compile is not clean. They are told from earlier
+        cleans by being created no earlier than the local one, so one that has
+        already failed is still followed, and fails the Install.
+        """
+        local_id = _job_id(local)
+        jobs = await self._command("firmware/get_jobs", configuration=configuration)
+        if not isinstance(jobs, list):
+            raise UnexpectedFrame("malformed firmware/get_jobs result", jobs)
+        try:
+            since = datetime.fromisoformat(local["created_at"])
+            remote = tuple(
+                ActiveJob(_job_id(job), "clean")
+                for job in jobs
+                if job["job_type"] == "clean"
+                and job["job_id"] != local_id
+                and datetime.fromisoformat(job["created_at"]) >= since
+            )
+        except (KeyError, TypeError, ValueError) as err:
+            raise UnexpectedFrame("malformed clean job", jobs) from err
+        return (ActiveJob(local_id, "clean"), *remote)
 
     async def resume_install(
         self,
         configuration: str,
         jobs: tuple[ActiveJob, ...],
         *,
-        port: str = "OTA",
+        port: str = OTA,
         on_output: OutputCallback | None = None,
         on_jobs: JobsCallback | None = None,
     ) -> InstallResult:

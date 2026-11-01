@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, NotRequired, TypedDict
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -15,7 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .connection import CONNECTION_ERRORS, connect_to_device_builder
 from .const import DOMAIN, VERSION_POLL_INTERVAL
-from .device_builder import ActiveJob, UnexpectedFrame, UnsupportedServerVersion
+from .device_builder import OTA, ActiveJob, UnexpectedFrame, UnsupportedServerVersion
 
 if TYPE_CHECKING:
     from .git_coordinator import GitSourcesCoordinator
@@ -91,6 +91,8 @@ class _StoredInstall(TypedDict):
     jobs: list[_StoredJob]
     # The commits to record if the Install succeeds.
     commits: dict[str, str]
+    # Where the Install uploads; absent in stores written before ticket 08.
+    port: NotRequired[str]
 
 
 class _StoredData(TypedDict, total=False):
@@ -107,6 +109,9 @@ class ActiveInstall:
 
     jobs: tuple[ActiveJob, ...]
     commits: Mapping[str, str]
+    # The upload address it was started with: it still uploads there if the
+    # option changes before it is re-attached.
+    port: str
 
 
 class TrackedConfigStore:
@@ -160,6 +165,7 @@ class TrackedConfigStore:
         return ActiveInstall(
             tuple(ActiveJob(job["job_id"], job["stage"]) for job in stored["jobs"]),
             stored["commits"],
+            stored.get("port", OTA),
         )
 
     async def async_set_active_install(self, active: ActiveInstall) -> None:
@@ -167,6 +173,7 @@ class TrackedConfigStore:
         self._data["active_install"] = {
             "jobs": [{"job_id": job.job_id, "stage": job.stage} for job in active.jobs],
             "commits": dict(active.commits),
+            "port": active.port,
         }
         await self._store.async_save(self._data)
 

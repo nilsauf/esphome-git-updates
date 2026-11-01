@@ -223,19 +223,86 @@ def job_events(*lines: str, status: str | None = "completed") -> list[dict[str, 
     return events
 
 
-def install_transcript(fixture: str, configuration: str = "host-node.yaml") -> Transcript:
-    """A captured Install, replayed as the entity runs it: no Clean Build, port OTA.
-
-    The captures were made with other configurations, ports and a Clean Build
-    step; only the frames the entity sends are rewritten, the server's answers
-    stay as captured.
-    """
-    frames = load_fixture(fixture)
-    start = next(
+def _index_of(frames: Transcript, command: str) -> int:
+    """Where the client sends *command* in *frames*."""
+    return next(
         i
         for i, step in enumerate(frames)
-        if step["dir"] == "out" and step["frame"]["command"] == "firmware/install"
+        if step["dir"] == "out" and step["frame"]["command"] == command
     )
+
+
+def with_clean_jobs(
+    frames: Transcript, remote: dict[str, str] | None = None, *, ended: tuple[str, ...] = ()
+) -> Transcript:
+    """A captured Clean Build Install, as the client now runs it: `firmware/get_jobs`
+    right after `firmware/clean`, then each *remote* clean job followed after the
+    local one, before compiling.
+
+    The captures predate that, so these frames are synthesized. `firmware/clean`
+    fans out one clean job per connected remote build server, and the add-on's
+    `get_jobs` showed them alongside the local one and older, finished cleans.
+    *remote* maps each such job id to the status it ends with; those in *ended*
+    have ended by the time `get_jobs` answers. A clean that does not complete
+    ends the Install, so the frames after it are dropped.
+    """
+    remote = remote or {}
+    clean_at = _index_of(frames, "firmware/clean")
+    configuration = frames[clean_at]["frame"]["args"]["configuration"]
+    local = frames[clean_at + 1]["frame"]["result"]
+    jobs = [
+        {"job_id": "older-clean", "job_type": "clean", "status": "completed",
+         "created_at": "2026-10-29T21:48:18.799927+00:00", "source": "remote"},
+        {"job_id": local["job_id"], "job_type": "clean", "status": "running",
+         "created_at": local["created_at"], "source": "local"},
+        *(
+            {"job_id": job_id, "job_type": "clean",
+             "status": status if job_id in ended else "queued",
+             # Queued right after the local clean, by the same command.
+             "created_at": local["created_at"], "source": "remote"}
+            for job_id, status in remote.items()
+        ),
+    ]
+    listing: Transcript = [
+        {"dir": "out", "frame": {"command": "firmware/get_jobs", "message_id": "clean-jobs",
+                                 "args": {"configuration": configuration}}},
+        {"dir": "in", "frame": {"message_id": "clean-jobs", "result": jobs}},
+    ]
+    install_at = _index_of(frames, "firmware/install")
+    replay = [*frames[: clean_at + 2], *listing, *frames[clean_at + 2 : install_at]]
+    for job_id, status in remote.items():
+        message_id = f"follow-{job_id}"
+        replay += [
+            {"dir": "out", "frame": {"command": "firmware/follow_job", "message_id": message_id,
+                                     "args": {"job_id": job_id}}},
+            *(
+                {"dir": "in", "frame": {"message_id": message_id, **event}}
+                for event in job_events(f"INFO Deleting build/{job_id}\n", status=status)
+            ),
+            {"dir": "in", "frame": {"message_id": message_id, "result": None}},
+        ]
+        if status != "completed":
+            return replay
+    return [*replay, *frames[install_at:]]
+
+
+def install_transcript(
+    fixture: str,
+    configuration: str = "host-node.yaml",
+    *,
+    clean: dict[str, str] | None = None,
+    port: str = "OTA",
+) -> Transcript:
+    """A captured Install, replayed as the entity runs it: uploading to *port*, and
+    with no Clean Build unless *clean* is given.
+
+    *clean* is a Clean Build's remote clean jobs, as `with_clean_jobs` takes them;
+    the fixture must have captured a Clean Build. The captures were made with
+    other configurations, ports and Clean Build choices; only the frames the
+    entity sends are rewritten, the server's answers stay as captured.
+    """
+    frames = load_fixture(fixture)
+    start = _index_of(frames, "firmware/install" if clean is None else "firmware/clean")
     replay: Transcript = [frames[0]]
     for step in frames[start:]:
         if step["dir"] == "out":
@@ -243,10 +310,10 @@ def install_transcript(fixture: str, configuration: str = "host-node.yaml") -> T
             if "configuration" in args:
                 args["configuration"] = configuration
             if step["frame"]["command"] == "firmware/install":
-                args["port"] = "OTA"
+                args["port"] = port
             step = {**step, "frame": {**step["frame"], "args": args}}
         replay.append(step)
-    return replay
+    return replay if clean is None else with_clean_jobs(replay, clean)
 
 
 @asynccontextmanager
