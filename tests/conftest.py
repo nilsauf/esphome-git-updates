@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Generator
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
+from aiohasupervisor import SupervisorNotFoundError
 from aiohttp import ClientWebSocketResponse
+from homeassistant.core import HomeAssistant
 
 
 @pytest.fixture(autouse=True)
@@ -35,3 +39,20 @@ def _cancel_stray_websocket_heartbeats(verify_cleanup: None) -> Generator[None]:
     for handle in loop._scheduled:  # type: ignore[attr-defined]
         if getattr(getattr(handle, "_callback", None), "__func__", None) in stray:
             handle.cancel()
+
+
+@pytest.fixture
+def supervisor(hass: HomeAssistant) -> Generator[MagicMock]:
+    """A Supervisor install whose installed add-ons are `addons_installed`: slug -> ingress port."""
+    hass.config.components.add("hassio")
+    client = MagicMock()
+    client.addons_installed = {}
+
+    async def addon_info(slug: str) -> SimpleNamespace:
+        if slug not in client.addons_installed:
+            raise SupervisorNotFoundError(f"addon {slug} not found")
+        return SimpleNamespace(slug=slug, ingress_port=client.addons_installed[slug])
+
+    client.addons.addon_info = addon_info
+    with patch("homeassistant.components.hassio.get_supervisor_client", return_value=client):
+        yield client

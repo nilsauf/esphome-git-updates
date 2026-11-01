@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from datetime import timedelta
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
@@ -25,6 +26,7 @@ from fake_device_builder import (
     FakeDeviceBuilder,
     Transcript,
     install_transcript,
+    port_of,
     serve,
     server_info,
 )
@@ -64,6 +66,35 @@ async def _set_up(hass: HomeAssistant, url: str, **kwargs: Any) -> MockConfigEnt
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     return entry
+
+
+async def test_the_add_on_ingress_port_is_looked_up_again_when_the_entry_is_set_up(
+    hass: HomeAssistant, supervisor: MagicMock
+) -> None:
+    files = {"host-node.yaml": "esphome:\n  name: host-node\n"}
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="host-node",
+        unique_id="host-node.yaml",
+        data={"addon_slug": "5c53de3b_esphome", "configuration": "host-node.yaml"},
+    )
+    entry.add_to_hass(hass)
+    async with serve([server_info(esphome_version="2026.10.1")], files) as (url, _):
+        supervisor.addons_installed = {"5c53de3b_esphome": port_of(url)}
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+
+    # The add-on restarts on another ingress port; the old one is gone.
+    async with serve([server_info(esphome_version="2026.11.0")], files) as (url, _):
+        supervisor.addons_installed = {"5c53de3b_esphome": port_of(url)}
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.LOADED
+    state = hass.states.get(ENTITY_ID)
+    assert state is not None
+    assert state.attributes["latest_version"] == "2026.11.0"
 
 
 async def test_a_new_entry_assumes_the_device_runs_the_available_version(

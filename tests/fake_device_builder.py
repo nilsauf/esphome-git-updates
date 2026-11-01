@@ -29,6 +29,7 @@ from typing import Any
 
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestServer
+from yarl import URL
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -63,6 +64,13 @@ def server_info(
             "in_docker": False,
         },
     }
+
+
+def port_of(url: str) -> int:
+    """The port a served fake listens on, as an add-on's ingress port."""
+    port = URL(url).port
+    assert port is not None
+    return port
 
 
 def _args_match(recorded: dict[str, Any], sent: dict[str, Any]) -> bool:

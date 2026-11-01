@@ -4,6 +4,24 @@
       "user": {
         "title": "Device Builder",
         "description": "Where the ESPHome Device Builder runs.",
+        "menu_options": {
+          "addon": "ESPHome add-on (auto)",
+          "manual": "Manual URL"
+        }
+      },
+      "addon": {
+        "title": "ESPHome add-on",
+        "description": "Use the ESPHome add-on on this Home Assistant. If it can't be found by its slug, the Device Builder that Home Assistant's ESPHome integration discovered is used.",
+        "data": {
+          "addon_slug": "Add-on slug"
+        },
+        "data_description": {
+          "addon_slug": "Only change this if your ESPHome add-on comes from a non-standard repository."
+        }
+      },
+      "manual": {
+        "title": "Device Builder URL",
+        "description": "Where the ESPHome Device Builder runs.",
         "data": {
           "url": "URL",
           "username": "Username",
@@ -24,6 +42,7 @@
       }
     },
     "error": {
+      "addon_not_found": "Neither the ESPHome add-on with this slug nor a Device Builder discovered by Home Assistant's ESPHome integration was found.",
       "cannot_connect": "Could not connect to the Device Builder.",
       "invalid_auth": "The Device Builder refused the username or password.",
       "unsupported_version": "This Device Builder version is not supported."

@@ -21,7 +21,7 @@ HACS offers new versions of the integration itself as they are released.
 
 ## Device Builder location
 
-The config flow asks where the Device Builder runs. The current release supports only **manual**; **add-on (auto)** is planned:
+The config flow asks where the Device Builder runs. **add-on (auto)** is offered only when Home Assistant has Supervisor:
 
 - **add-on (auto)**: on a Supervisor install, the integration finds the ESPHome add-on itself and talks to it on its internal port, with no login. If your add-on has a non-standard slug, you can override it. If the add-on can't be found, the integration falls back to the Device Builder address that Home Assistant's own ESPHome integration discovered.
 - **manual**: enter the Device Builder's base URL, for example `http://192.168.1.10:6052`. Add a username and password only if the Device Builder asks for a login. Use this for a standalone Device Builder, or when Supervisor isn't available.

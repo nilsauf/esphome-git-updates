@@ -1,6 +1,7 @@
 {
   "domain": "esphome_git_updates",
   "name": "ESPHome Git Updates",
+  "after_dependencies": ["hassio"],
   "codeowners": ["@nilsauf"],
   "config_flow": true,
   "documentation": "https://github.com/nilsauf/esphome-git-updates",
