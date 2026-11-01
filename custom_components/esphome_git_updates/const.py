@@ -11,3 +11,6 @@ CONF_CONFIGURATION: Final = "configuration"
 
 # How often the Available ESPHome Version is read from the Device Builder.
 VERSION_POLL_INTERVAL: Final = timedelta(minutes=5)
+
+# How often Git Sources are re-read from the YAML and their Latest Commits fetched.
+GIT_POLL_INTERVAL: Final = timedelta(minutes=30)

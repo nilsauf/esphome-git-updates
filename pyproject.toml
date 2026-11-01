@@ -5,7 +5,7 @@ requires-python = ">=3.13"
 dependencies = ["aiohttp>=3.9"]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "pytest-homeassistant-custom-component", "mypy"]
+dev = ["pytest", "pytest-asyncio", "pytest-homeassistant-custom-component", "mypy", "types-PyYAML"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -27,8 +27,13 @@ files = [
     "custom_components/esphome_git_updates",
     "tests/conftest.py",
     "tests/fake_device_builder.py",
+    "tests/git_repo.py",
     "tests/test_config_flow.py",
+    "tests/test_git_remote.py",
+    "tests/test_git_sources.py",
+    "tests/test_git_updates.py",
     "tests/test_update.py",
+    "tests/test_versions.py",
 ]
 
 [[tool.mypy.overrides]]

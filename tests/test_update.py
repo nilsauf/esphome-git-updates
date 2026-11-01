@@ -21,7 +21,13 @@ from homeassistant.helpers import (
 
 from custom_components.esphome_git_updates.const import DOMAIN
 from custom_components.esphome_git_updates.coordinator import protocol_issue_id
-from fake_device_builder import FakeDeviceBuilder, Transcript, load_fixture, serve, server_info
+from fake_device_builder import (
+    FakeDeviceBuilder,
+    Transcript,
+    install_transcript,
+    serve,
+    server_info,
+)
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
 ENTITY_ID = "update.host_node_firmware"
@@ -34,8 +40,11 @@ def _enable_custom_integrations(enable_custom_integrations: None) -> None:
 
 @pytest.fixture
 async def builder() -> AsyncIterator[tuple[str, FakeDeviceBuilder]]:
-    """A Device Builder that compiles with ESPHome 2026.10.1."""
-    async with serve([server_info(esphome_version="2026.10.1")]) as served:
+    """A Device Builder that compiles with ESPHome 2026.10.1; the config has no Git Sources."""
+    async with serve(
+        [server_info(esphome_version="2026.10.1")],
+        {"host-node.yaml": "esphome:\n  name: host-node\n"},
+    ) as served:
         yield served
 
 
@@ -223,32 +232,6 @@ async def test_removing_the_entry_drops_its_repair_issue_and_stored_versions(
     assert f"{DOMAIN}.{entry.entry_id}" not in hass_storage
 
 
-def _install_transcript(fixture: str, configuration: str = "host-node.yaml") -> Transcript:
-    """A captured Install, replayed as the entity runs it: no Clean Build, port OTA.
-
-    The captures were made with other configurations, ports and a Clean Build
-    step; only the frames the entity sends are rewritten, the server's answers
-    stay as captured.
-    """
-    frames = load_fixture(fixture)
-    start = next(
-        i
-        for i, step in enumerate(frames)
-        if step["dir"] == "out" and step["frame"]["command"] == "firmware/install"
-    )
-    replay: Transcript = [frames[0]]
-    for step in frames[start:]:
-        if step["dir"] == "out":
-            args = dict(step["frame"]["args"])
-            if "configuration" in args:
-                args["configuration"] = configuration
-            if step["frame"]["command"] == "firmware/install":
-                args["port"] = "OTA"
-            step = {**step, "frame": {**step["frame"], "args": args}}
-        replay.append(step)
-    return replay
-
-
 async def _set_up_with_an_update(
     hass: HomeAssistant, url: str, hass_storage: dict[str, Any]
 ) -> MockConfigEntry:
@@ -290,7 +273,7 @@ async def test_a_successful_install_records_the_version_and_the_update_disappear
 ) -> None:
     url, fake = builder
     entry = await _set_up_with_an_update(hass, url, hass_storage)
-    fake.transcript = _install_transcript("install_clean_success")
+    fake.transcript = install_transcript("install_clean_success")
     in_progress: list[bool] = []
     stop_listening = hass.bus.async_listen(
         "state_changed",
@@ -320,7 +303,7 @@ async def test_a_failed_compile_notifies_with_the_stage_error_and_log_tail_and_r
 ) -> None:
     url, fake = builder
     entry = await _set_up_with_an_update(hass, url, hass_storage)
-    fake.transcript = _install_transcript("install_compile_failed")
+    fake.transcript = install_transcript("install_compile_failed")
 
     with pytest.raises(HomeAssistantError, match="compile"):
         await _install(hass)
@@ -354,7 +337,7 @@ async def test_a_failed_upload_notifies_with_the_upload_stage_and_records_nothin
 ) -> None:
     url, fake = builder
     entry = await _set_up_with_an_update(hass, url, hass_storage)
-    fake.transcript = _install_transcript("install_upload_failed")
+    fake.transcript = install_transcript("install_upload_failed")
 
     with pytest.raises(HomeAssistantError, match="upload"):
         await _install(hass)
@@ -392,7 +375,7 @@ async def test_a_successful_install_with_warnings_notifies_with_the_warnings(
     url, fake = builder
     entry = await _set_up_with_an_update(hass, url, hass_storage)
     warning = "\\033[33mWARNING GPIO2 is a strapping PIN and should only be used for I/O with care.\\033[0m\n"
-    fake.transcript = _with_output_line(_install_transcript("install_clean_success"), 0, warning)
+    fake.transcript = _with_output_line(install_transcript("install_clean_success"), 0, warning)
 
     await _install(hass)
 
@@ -416,7 +399,7 @@ async def test_compiler_warnings_and_the_remote_build_secrets_notice_are_not_war
     """The add-on's real Install: a remote compile full of compiler warnings."""
     url, fake = builder
     await _set_up_with_an_update(hass, url, hass_storage)
-    fake.transcript = _install_transcript("addon_success")
+    fake.transcript = install_transcript("addon_success")
 
     await _install(hass)
 
@@ -432,12 +415,12 @@ async def test_a_clean_success_dismisses_the_notification_of_an_earlier_failed_i
 ) -> None:
     url, fake = builder
     await _set_up_with_an_update(hass, url, hass_storage)
-    fake.transcript = _install_transcript("install_upload_failed")
+    fake.transcript = install_transcript("install_upload_failed")
     with pytest.raises(HomeAssistantError):
         await _install(hass)
     assert len(_notifications(hass)) == 1
 
-    fake.transcript = _install_transcript("install_clean_success")
+    fake.transcript = install_transcript("install_clean_success")
     await _install(hass)
 
     assert _notifications(hass) == []
@@ -450,7 +433,7 @@ async def test_a_connection_lost_mid_compile_notifies_with_the_stage_reached_and
 ) -> None:
     url, fake = builder
     entry = await _set_up_with_an_update(hass, url, hass_storage)
-    transcript = _install_transcript("install_compile_failed")
+    transcript = install_transcript("install_compile_failed")
     lost_at = next(
         i
         for i, step in enumerate(transcript)

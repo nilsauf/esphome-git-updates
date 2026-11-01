@@ -24,7 +24,9 @@ from .coordinator import (
     TrackedConfigStore,
 )
 from .device_builder import InstallOutcome
+from .git_coordinator import GitSourcesCoordinator
 from .install_log import InstallLog
+from .versions import SourceCommits, Versions
 
 
 async def async_setup_entry(
@@ -37,9 +39,11 @@ async def async_setup_entry(
 
 
 class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEntity):
-    """Offers an update when the Available ESPHome Version differs from the installed one.
+    """Offers an update when any Source differs from what is installed.
 
-    Until a Linked Device is supported, it sits on a device of its own.
+    The Sources are the ESPHome version (polled by the coordinator) and every
+    Git Source on a Floating Ref (polled by the git coordinator). Until a
+    Linked Device is supported, it sits on a device of its own.
     """
 
     _attr_has_entity_name = True
@@ -53,6 +57,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         self._entry = entry
         self._notification_id = f"{DOMAIN}_{entry.entry_id}_install"
         self._store: TrackedConfigStore = entry.runtime_data.store
+        self._git: GitSourcesCoordinator = entry.runtime_data.git_coordinator
         self._attr_unique_id = entry.entry_id
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
@@ -60,13 +65,33 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
             model=entry.data[CONF_CONFIGURATION],
         )
 
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(self._git.async_add_listener(self._handle_coordinator_update))
+
     @property
     def installed_version(self) -> str | None:
-        return self._store.installed_esphome_version
+        return self._versions().installed
 
     @property
     def latest_version(self) -> str | None:
-        return self.coordinator.data
+        return self._versions().latest
+
+    @property
+    def release_summary(self) -> str | None:
+        return self._versions().release_summary
+
+    def _versions(self) -> Versions:
+        return Versions(
+            installed_esphome=self._store.installed_esphome_version,
+            available_esphome=self.coordinator.data,
+            git_sources=tuple(
+                SourceCommits(
+                    tracked.source.name, self._store.installed_commit(key), tracked.latest_commit
+                )
+                for key, tracked in (self._git.data or {}).items()
+            ),
+        )
 
     def version_is_newer(self, latest_version: str, installed_version: str) -> bool:
         # "Newer" means "differs": a Device Builder can also move back a version.
@@ -79,6 +104,9 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         output stays in the Device Builder, nothing is written to /config.
         """
         log = InstallLog()
+        # What gets recorded is what the poller saw now, not what the remote
+        # holds once the build is done: a push during the build stays an update.
+        commits = self._git.latest_commits()
         try:
             async with connect_to_device_builder(
                 self.hass, self._entry.data, long_running=True
@@ -93,7 +121,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
             self._fail(log.stage, str(err), log)
         if result.outcome is not InstallOutcome.COMPLETED:
             self._fail(result.stage, result.error or result.outcome.value, log)
-        await self._store.async_set_installed_esphome_version(esphome_version)
+        await self._store.async_record_install(esphome_version, commits)
         if log.warnings:
             self._notify("Installed with warnings", log.warnings_text())
         else:

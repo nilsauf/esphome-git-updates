@@ -41,6 +41,10 @@
     "unexpected_frame": {
       "title": "Unexpected answer from the Device Builder for {title}",
       "description": "The Device Builder that compiles {title} sent something ESPHome Git Updates does not understand, so updates for {title} are paused. This usually means the Device Builder changed its protocol. Details: {error}"
+    },
+    "include_refused": {
+      "title": "Device Builder refused to read a file of {title}",
+      "description": "{title} includes {file}, but the Device Builder refused to read it ({error}). Without it, ESPHome Git Updates cannot see every Git Source of {title}, so their updates are not refreshed. This usually means the Device Builder now restricts which files can be read. If {file} was removed or renamed, fix the include in the YAML."
     }
   }
 }
