@@ -1,0 +1,3 @@
+# Generic integration, one entry per ESPHome config
+
+The marsrelay YAML package and build script (`packages/marsrelay_update.yaml`, `scripts/marsrelay_build.py`) become a generic HACS integration, `esphome_git_updates`, rather than a marsrelay-specific one. Each config entry is one Tracked Config, picked from the Device Builder's configurations. Its Git Sources (floating `external_components` and remote `packages:` refs) and the ESPHome version are discovered from the YAML. Configs are not auto-discovered: a build takes 10–45 minutes and cancels any other job for the same config, so the user enables each config deliberately.
