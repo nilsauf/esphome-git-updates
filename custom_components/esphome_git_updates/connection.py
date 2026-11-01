@@ -24,18 +24,22 @@ CONNECTION_ERRORS = (DeviceBuilderError, aiohttp.ClientError, OSError, TimeoutEr
 
 @asynccontextmanager
 async def connect_to_device_builder(
-    hass: HomeAssistant, location: Mapping[str, Any]
+    hass: HomeAssistant, location: Mapping[str, Any], *, long_running: bool = False
 ) -> AsyncIterator[DeviceBuilderClient]:
     """Connect to the manual URL in *location*, logging in if it has credentials.
 
-    The timeout covers the body too, so keep it to quick commands; an Install
-    needs its own connection handling.
+    The timeout covers the body too, so keep it to quick commands. An Install
+    passes *long_running*: then only connecting and logging in are timed, and
+    the websocket heartbeat notices a Device Builder that goes away.
     """
-    async with asyncio.timeout(CONNECT_TIMEOUT):
+    timeout = asyncio.timeout(CONNECT_TIMEOUT)
+    async with timeout:
         async with connect(
             async_get_clientsession(hass),
             location[CONF_URL],
             username=location.get(CONF_USERNAME),
             password=location.get(CONF_PASSWORD),
         ) as client:
+            if long_running:
+                timeout.reschedule(None)
             yield client

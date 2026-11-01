@@ -8,9 +8,11 @@ from typing import Any
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
     device_registry as dr,
     entity_registry as er,
@@ -19,7 +21,7 @@ from homeassistant.helpers import (
 
 from custom_components.esphome_git_updates.const import DOMAIN
 from custom_components.esphome_git_updates.coordinator import protocol_issue_id
-from fake_device_builder import FakeDeviceBuilder, serve, server_info
+from fake_device_builder import FakeDeviceBuilder, Transcript, load_fixture, serve, server_info
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
 ENTITY_ID = "update.host_node_firmware"
@@ -219,3 +221,249 @@ async def test_removing_the_entry_drops_its_repair_issue_and_stored_versions(
 
     assert list(issue_registry.issues) == []
     assert f"{DOMAIN}.{entry.entry_id}" not in hass_storage
+
+
+def _install_transcript(fixture: str, configuration: str = "host-node.yaml") -> Transcript:
+    """A captured Install, replayed as the entity runs it: no Clean Build, port OTA.
+
+    The captures were made with other configurations, ports and a Clean Build
+    step; only the frames the entity sends are rewritten, the server's answers
+    stay as captured.
+    """
+    frames = load_fixture(fixture)
+    start = next(
+        i
+        for i, step in enumerate(frames)
+        if step["dir"] == "out" and step["frame"]["command"] == "firmware/install"
+    )
+    replay: Transcript = [frames[0]]
+    for step in frames[start:]:
+        if step["dir"] == "out":
+            args = dict(step["frame"]["args"])
+            if "configuration" in args:
+                args["configuration"] = configuration
+            if step["frame"]["command"] == "firmware/install":
+                args["port"] = "OTA"
+            step = {**step, "frame": {**step["frame"], "args": args}}
+        replay.append(step)
+    return replay
+
+
+async def _set_up_with_an_update(
+    hass: HomeAssistant, url: str, hass_storage: dict[str, Any]
+) -> MockConfigEntry:
+    """An entry whose device runs 2026.10.0 while the Device Builder has 2026.10.1."""
+    entry_id = "tracked"
+    hass_storage[f"{DOMAIN}.{entry_id}"] = {
+        "version": 1,
+        "key": f"{DOMAIN}.{entry_id}",
+        "data": {"installed_esphome_version": "2026.10.0"},
+    }
+    entry = await _set_up(hass, url, entry_id=entry_id)
+    assert hass.states.get(ENTITY_ID).state == STATE_ON  # type: ignore[union-attr]
+    return entry
+
+
+async def _install(hass: HomeAssistant) -> None:
+    await hass.services.async_call(
+        "update", "install", {"entity_id": ENTITY_ID}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+
+def _recorded_version(hass_storage: dict[str, Any], entry: MockConfigEntry) -> str | None:
+    """The Installed ESPHome Version in the entry's store, as saved to disk."""
+    version: str | None = hass_storage[f"{DOMAIN}.{entry.entry_id}"]["data"].get(
+        "installed_esphome_version"
+    )
+    return version
+
+
+def _notifications(hass: HomeAssistant) -> list[persistent_notification.Notification]:
+    return list(persistent_notification._async_get_or_create_notifications(hass).values())
+
+
+async def test_a_successful_install_records_the_version_and_the_update_disappears(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    fake.transcript = _install_transcript("install_clean_success")
+    in_progress: list[bool] = []
+    stop_listening = hass.bus.async_listen(
+        "state_changed",
+        lambda event: in_progress.append(event.data["new_state"].attributes["in_progress"]),
+        callback(lambda event_data: event_data["entity_id"] == ENTITY_ID),
+    )
+
+    await _install(hass)
+    stop_listening()
+
+    assert fake.mismatches == []
+    assert fake.finished
+    assert in_progress == [True, False]
+    state = hass.states.get(ENTITY_ID)
+    assert state is not None
+    assert state.state == STATE_OFF
+    assert state.attributes["installed_version"] == "2026.10.1"
+    assert state.attributes["in_progress"] is False
+    assert _recorded_version(hass_storage, entry) == "2026.10.1"
+    assert _notifications(hass) == []
+
+
+async def test_a_failed_compile_notifies_with_the_stage_error_and_log_tail_and_records_nothing(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    fake.transcript = _install_transcript("install_compile_failed")
+
+    with pytest.raises(HomeAssistantError, match="compile"):
+        await _install(hass)
+
+    assert fake.mismatches == []
+    state = hass.states.get(ENTITY_ID)
+    assert state is not None
+    assert state.state == STATE_ON
+    assert state.attributes["installed_version"] == "2026.10.0"
+    assert state.attributes["in_progress"] is False
+    assert _recorded_version(hass_storage, entry) == "2026.10.0"
+    [notification] = _notifications(hass)
+    assert "host-node" in str(notification["title"])
+    message = notification["message"]
+    assert "compile" in message
+    assert "exit code 1" in message
+    # The last 30 of the compile's 42 lines, with their ANSI colours stripped.
+    assert "[7/30] CXX obj/src/esphome/components/host/gpio.cpp.o" not in message
+    assert "[8/30] CXX obj/src/esphome/components/mdns/mdns_host.cpp.o" in message
+    assert "error: ‘this_symbol_does_not_exist’ was not declared in this scope" in message
+    assert "FAILED: [code=1] obj/src/main.cpp.o" in message
+    assert "ERROR Host build failed\n" in message
+    assert "\\033" not in message
+    assert "\x1b" not in message
+
+
+async def test_a_failed_upload_notifies_with_the_upload_stage_and_records_nothing(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    fake.transcript = _install_transcript("install_upload_failed")
+
+    with pytest.raises(HomeAssistantError, match="upload"):
+        await _install(hass)
+
+    assert fake.mismatches == []
+    assert hass.states.get(ENTITY_ID).state == STATE_ON  # type: ignore[union-attr]
+    assert _recorded_version(hass_storage, entry) == "2026.10.0"
+    [notification] = _notifications(hass)
+    message = notification["message"]
+    assert "**upload**" in message
+    assert (
+        "ERROR Upload failed after 3 attempts: connecting to 127.0.0.1 failed: "
+        "[Errno 111] Connection refused"
+    ) in message
+
+
+def _with_output_line(transcript: Transcript, stage_index: int, line: str) -> Transcript:
+    """*transcript* with *line* added to the output of its *stage_index*-th followed job."""
+    follows = [
+        i
+        for i, step in enumerate(transcript)
+        if step["dir"] == "out" and step["frame"]["command"] == "firmware/follow_job"
+    ]
+    follow = transcript[follows[stage_index]]["frame"]
+    frame = {"message_id": follow["message_id"], "event": "output", "data": line}
+    at = follows[stage_index] + 1
+    return [*transcript[:at], {"dir": "in", "frame": frame}, *transcript[at:]]
+
+
+async def test_a_successful_install_with_warnings_notifies_with_the_warnings(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    warning = "\\033[33mWARNING GPIO2 is a strapping PIN and should only be used for I/O with care.\\033[0m\n"
+    fake.transcript = _with_output_line(_install_transcript("install_clean_success"), 0, warning)
+
+    await _install(hass)
+
+    assert fake.mismatches == []
+    assert _recorded_version(hass_storage, entry) == "2026.10.1"
+    [notification] = _notifications(hass)
+    assert "host-node" in str(notification["title"])
+    assert "warning" in str(notification["title"]).lower()
+    assert (
+        "WARNING GPIO2 is a strapping PIN and should only be used for I/O with care."
+        in notification["message"]
+    )
+    assert "\\033" not in notification["message"]
+
+
+async def test_compiler_warnings_and_the_remote_build_secrets_notice_are_not_warnings(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    """The add-on's real Install: a remote compile full of compiler warnings."""
+    url, fake = builder
+    await _set_up_with_an_update(hass, url, hass_storage)
+    fake.transcript = _install_transcript("addon_success")
+
+    await _install(hass)
+
+    assert fake.mismatches == []
+    assert hass.states.get(ENTITY_ID).state == STATE_OFF  # type: ignore[union-attr]
+    assert _notifications(hass) == []
+
+
+async def test_a_clean_success_dismisses_the_notification_of_an_earlier_failed_install(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    await _set_up_with_an_update(hass, url, hass_storage)
+    fake.transcript = _install_transcript("install_upload_failed")
+    with pytest.raises(HomeAssistantError):
+        await _install(hass)
+    assert len(_notifications(hass)) == 1
+
+    fake.transcript = _install_transcript("install_clean_success")
+    await _install(hass)
+
+    assert _notifications(hass) == []
+
+
+async def test_a_connection_lost_mid_compile_notifies_with_the_stage_reached_and_records_nothing(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    transcript = _install_transcript("install_compile_failed")
+    lost_at = next(
+        i
+        for i, step in enumerate(transcript)
+        if step["frame"].get("data", "").startswith("[26/30]")
+    )
+    fake.transcript = [*transcript[: lost_at + 1], {"dir": "close"}]
+
+    with pytest.raises(HomeAssistantError, match="compile"):
+        await _install(hass)
+
+    assert hass.states.get(ENTITY_ID).attributes["in_progress"] is False  # type: ignore[union-attr]
+    assert _recorded_version(hass_storage, entry) == "2026.10.0"
+    [notification] = _notifications(hass)
+    assert "**compile**" in notification["message"]
+    assert "websocket closed" in notification["message"]
+    assert "[26/30] CXX obj/src/main.cpp.o" in notification["message"]
