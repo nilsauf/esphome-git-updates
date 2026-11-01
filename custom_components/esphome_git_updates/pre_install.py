@@ -8,75 +8,97 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
 from .const import DOMAIN
+from .git_sources import OTA_PLATFORMS, GitSource, OtaStatus
 
 _MISSING_OTA = "missing_ota"
 _REFRESH_POLICY = "refresh_policy"
 
 
-def _issue_id(kind: str, entry_id: str) -> str:
-    return f"{kind}_{entry_id}"
+def missing_ota_issue_id(entry_id: str) -> str:
+    """The Repair issue raised when an entry's YAML cannot be updated over the air."""
+    return f"{_MISSING_OTA}_{entry_id}"
+
+
+def refresh_policy_issue_id(entry_id: str) -> str:
+    """The Repair issue raised when a tracked Git Source's Refresh Policy is not `always`."""
+    return f"{_REFRESH_POLICY}_{entry_id}"
 
 
 @dataclass(frozen=True)
 class PreInstallCheck:
     """What the YAML, as last read, says about installing over the air."""
 
-    # No `ota:` entry with platform `esphome` or `web_server`.
-    missing_ota: bool
-    # The names of the tracked Git Sources without `refresh: always` or `0s`.
-    stale_refresh: tuple[str, ...]
+    ota: OtaStatus
+    # The tracked Git Sources whose Refresh Policy is not `always` or `0s`.
+    wrong_refresh_policy: tuple[GitSource, ...]
+
+    @property
+    def ota_missing(self) -> bool:
+        """Whether OTA is known to be missing; a remote package may add it, so unknown is not."""
+        return self.ota is OtaStatus.MISSING
+
+    @property
+    def wrong_refresh_policy_names(self) -> str:
+        return ", ".join(source.name for source in self.wrong_refresh_policy)
 
     def refusal(self, title: str) -> str | None:
         """Why an Install of *title* is refused, or None if it may go ahead."""
         reasons = []
-        if self.missing_ota:
+        if self.ota_missing:
+            platforms = " or ".join(f"`{platform}`" for platform in OTA_PLATFORMS)
             reasons.append(
-                "its YAML has no `ota:` platform `esphome` or `web_server`, so it cannot be "
+                f"its YAML has no `ota:` platform {platforms}, so it cannot be "
                 "updated over the air; flash it once over USB with OTA enabled"
             )
-        if self.stale_refresh:
+        if self.wrong_refresh_policy:
             reasons.append(
-                f"the Git Sources {', '.join(self.stale_refresh)} lack `refresh: always`, "
-                "so ESPHome may build a stale cached copy"
+                f"the Git Sources {self.wrong_refresh_policy_names} lack `refresh: always`, "
+                "so ESPHome may build a stale cached clone"
             )
         if not reasons:
             return None
         return f"Install of {title} refused: {'; and '.join(reasons)}. See Repairs."
 
-    def update_issues(self, hass: HomeAssistant, entry_id: str, title: str) -> None:
+
+class PreInstallIssues:
+    """The Repair issues of an entry's pre-install checks, one per check.
+
+    Each issue follows its check as last read: raised while it fails, cleared
+    once it passes.
+    """
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self._hass = hass
+        self._title = entry.title
+        self._entry_id = entry.entry_id
+
+    def report(self, check: PreInstallCheck) -> None:
         """Raise the Repair issue of each failed check, and clear the others."""
-        _set_issue(hass, _MISSING_OTA, entry_id, self.missing_ota, {"title": title})
-        _set_issue(
-            hass,
+        self._set(missing_ota_issue_id(self._entry_id), _MISSING_OTA, check.ota_missing, {})
+        self._set(
+            refresh_policy_issue_id(self._entry_id),
             _REFRESH_POLICY,
-            entry_id,
-            bool(self.stale_refresh),
-            {"title": title, "sources": ", ".join(self.stale_refresh)},
+            bool(check.wrong_refresh_policy),
+            {"sources": check.wrong_refresh_policy_names},
         )
 
-
-def delete_pre_install_issues(hass: HomeAssistant, entry_id: str) -> None:
-    """Drop the Repair issues of a removed Tracked Config."""
-    for kind in (_MISSING_OTA, _REFRESH_POLICY):
-        ir.async_delete_issue(hass, DOMAIN, _issue_id(kind, entry_id))
-
-
-def _set_issue(
-    hass: HomeAssistant, kind: str, entry_id: str, failed: bool, placeholders: dict[str, str]
-) -> None:
-    if not failed:
-        ir.async_delete_issue(hass, DOMAIN, _issue_id(kind, entry_id))
-        return
-    ir.async_create_issue(
-        hass,
-        DOMAIN,
-        _issue_id(kind, entry_id),
-        is_fixable=False,
-        severity=ir.IssueSeverity.ERROR,
-        translation_key=kind,
-        translation_placeholders=placeholders,
-    )
+    def _set(
+        self, issue_id: str, translation_key: str, failed: bool, placeholders: dict[str, str]
+    ) -> None:
+        if not failed:
+            ir.async_delete_issue(self._hass, DOMAIN, issue_id)
+            return
+        ir.async_create_issue(
+            self._hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=False,
+            severity=ir.IssueSeverity.ERROR,
+            translation_key=translation_key,
+            translation_placeholders={"title": self._title, **placeholders},
+        )

@@ -32,13 +32,11 @@ from fake_device_builder import (
     server_info,
 )
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
+from tracked_config import OTA
 
 ENTITY_ID = "update.host_node_firmware"
 
-
-@pytest.fixture(autouse=True)
-def _enable_custom_integrations(enable_custom_integrations: None) -> None:
-    """Let Home Assistant load the integration from custom_components/."""
+pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
 
 @pytest.fixture
@@ -46,7 +44,7 @@ async def builder() -> AsyncIterator[tuple[str, FakeDeviceBuilder]]:
     """A Device Builder that compiles with ESPHome 2026.10.1; the config has no Git Sources."""
     async with serve(
         [server_info(esphome_version="2026.10.1")],
-        {"host-node.yaml": "esphome:\n  name: host-node\nota:\n  - platform: esphome\n"},
+        {"host-node.yaml": f"esphome:\n  name: host-node\n{OTA}"},
     ) as served:
         yield served
 
@@ -72,7 +70,7 @@ async def _set_up(hass: HomeAssistant, url: str, **kwargs: Any) -> MockConfigEnt
 async def test_the_add_on_ingress_port_is_looked_up_again_when_the_entry_is_set_up(
     hass: HomeAssistant, supervisor: MagicMock
 ) -> None:
-    files = {"host-node.yaml": "esphome:\n  name: host-node\nota:\n  - platform: esphome\n"}
+    files = {"host-node.yaml": f"esphome:\n  name: host-node\n{OTA}"}
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="host-node",

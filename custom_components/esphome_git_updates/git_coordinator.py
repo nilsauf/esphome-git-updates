@@ -7,6 +7,7 @@ import logging
 from dataclasses import dataclass
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .connection import CONNECTION_ERRORS, connect_to_device_builder
@@ -28,11 +29,10 @@ from .git_sources import (
     Discovery,
     DiscoveryError,
     GitSource,
-    OtaStatus,
     Reader,
     discover_git_sources,
 )
-from .pre_install import PreInstallCheck
+from .pre_install import PreInstallCheck, PreInstallIssues
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -92,8 +92,9 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
         self._issue = issue
         self._untrackable: tuple[str, ...] = ()
         self._failing: set[str] = set()
+        self._pre_install_issues = PreInstallIssues(hass, entry)
         # What the YAML said at the last successful poll.
-        self.pre_install_check: PreInstallCheck | None = None
+        self._pre_install_check: PreInstallCheck | None = None
 
     async def _async_update_data(self) -> dict[str, TrackedGitSource]:
         discovery = await self._discover()
@@ -124,19 +125,31 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
         return tracked
 
     def _check(self, discovery: Discovery, tracked: dict[str, TrackedGitSource]) -> None:
-        """Check the YAML just read for an Install, and raise or clear its Repair issues.
-
-        A remote package may add OTA, so an unknown OTA is not refused.
-        """
-        self.pre_install_check = PreInstallCheck(
-            missing_ota=discovery.ota is OtaStatus.MISSING,
-            stale_refresh=tuple(
-                source.name for source in discovery.stale_refresh if source.key in tracked
+        """Check the YAML just read for an Install, and raise or clear its Repair issues."""
+        self._pre_install_check = PreInstallCheck(
+            ota=discovery.ota,
+            # A Pinned Ref never moves, so its Refresh Policy does not matter.
+            wrong_refresh_policy=tuple(
+                source for source in discovery.wrong_refresh_policy if source.key in tracked
             ),
         )
-        self.pre_install_check.update_issues(
-            self.hass, self.config_entry.entry_id, self.config_entry.title
-        )
+        self._pre_install_issues.report(self._pre_install_check)
+
+    async def async_check_before_install(self) -> None:
+        """Read the YAML again and raise HomeAssistantError if an Install must be refused.
+
+        It is refused when the YAML cannot be read, or when a pre-install check fails.
+        """
+        title = self.config_entry.title
+        await self.async_refresh()
+        check = self._pre_install_check
+        if not self.last_update_success or check is None:
+            raise HomeAssistantError(
+                f"Install of {title} refused: cannot read its YAML to check "
+                f"it before installing: {self.last_exception}"
+            )
+        if (refusal := check.refusal(title)) is not None:
+            raise HomeAssistantError(refusal)
 
     def latest_commits(self) -> dict[str, str]:
         """The Latest Commit last seen of each tracked Git Source, by key."""

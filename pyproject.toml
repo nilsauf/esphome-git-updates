@@ -36,6 +36,7 @@ files = [
     "tests/test_pre_install_checks.py",
     "tests/test_update.py",
     "tests/test_versions.py",
+    "tests/tracked_config.py",
 ]
 
 [[tool.mypy.overrides]]

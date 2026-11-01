@@ -155,15 +155,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         self._attr_in_progress = True
         self.async_write_ha_state()
         try:
-            await self._git.async_refresh()
-            check = self._git.pre_install_check
-            if not self._git.last_update_success or check is None:
-                raise HomeAssistantError(
-                    f"Install of {self._entry.title} refused: cannot read its YAML to check "
-                    f"it before installing: {self._git.last_exception}"
-                )
-            if (refusal := check.refusal(self._entry.title)) is not None:
-                raise HomeAssistantError(refusal)
+            await self._git.async_check_before_install()
         except BaseException:
             self._attr_in_progress = False
             self.async_write_ha_state()

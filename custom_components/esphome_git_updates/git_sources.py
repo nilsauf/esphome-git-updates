@@ -12,7 +12,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Any
+from typing import Any, NamedTuple
 
 import yaml
 
@@ -53,7 +53,7 @@ class GitSource:
 class OtaStatus(Enum):
     """Whether the YAML lets the device be updated over the air."""
 
-    # An `ota:` entry with platform `esphome` or `web_server`.
+    # An `ota:` entry with one of OTA_PLATFORMS.
     PRESENT = "present"
     MISSING = "missing"
     # None in the files read, but a remote package, which is never read, may add one.
@@ -61,7 +61,7 @@ class OtaStatus(Enum):
 
 
 # The `ota:` platforms the Device Builder can upload through.
-_OTA_PLATFORMS = frozenset({"esphome", "web_server"})
+OTA_PLATFORMS = ("esphome", "web_server")
 
 
 @dataclass(frozen=True)
@@ -71,7 +71,7 @@ class Discovery:
     untrackable: tuple[str, ...]
     ota: OtaStatus
     # The Sources whose Refresh Policy lets ESPHome build a stale cached clone.
-    stale_refresh: tuple[GitSource, ...]
+    wrong_refresh_policy: tuple[GitSource, ...]
 
 
 @dataclass(frozen=True)
@@ -159,16 +159,18 @@ async def discover_git_sources(configuration: str, read: Reader) -> Discovery:
     sources: list[GitSource] = []
     stale: set[str] = set()
     untrackable = list(gathered.untrackable)
-    for where, raw, refresh in gathered.candidates:
-        value = _substitute(raw, gathered.substitutions)
+    for candidate in gathered.candidates:
+        value = _substitute(candidate.source, gathered.substitutions)
         secret = _find_secret(value)
         if secret is not None:
-            untrackable.append(f"{where} source depends on !secret {secret.name}: {value!r}")
+            untrackable.append(
+                f"{candidate.where} source depends on !secret {secret.name}: {value!r}"
+            )
             continue
         source = _parse_source(value)
         if source is not None and not _is_pinned_to_a_commit(source):
             sources.append(source)
-            if not _refreshes_always(_substitute(refresh, gathered.substitutions)):
+            if not _refreshes_always(_substitute(candidate.refresh, gathered.substitutions)):
                 stale.add(source.key)
     distinct = _distinct(sources)
     return Discovery(
@@ -191,7 +193,7 @@ def _ota_status(gathered: _Gathered) -> OtaStatus:
     platforms = {
         _substitute(platform, gathered.substitutions) for platform in gathered.ota_platforms
     }
-    if platforms & _OTA_PLATFORMS:
+    if not platforms.isdisjoint(OTA_PLATFORMS):
         return OtaStatus.PRESENT
     return OtaStatus.UNKNOWN if gathered.remote_packages else OtaStatus.MISSING
 
@@ -210,12 +212,22 @@ def _distinct(sources: list[GitSource]) -> tuple[GitSource, ...]:
     )
 
 
+class _Candidate(NamedTuple):
+    """A possible Git Source, as written, before substitutions."""
+
+    # The key it was declared under: `external_components` or `packages`.
+    where: str
+    # The raw `source:` or remote package.
+    source: Any
+    # The raw `refresh:`, its Refresh Policy.
+    refresh: Any
+
+
 @dataclass
 class _Gathered:
     """The possible Git Sources of a config and of its local packages."""
 
-    # (where it was declared, the raw source or remote package, its raw `refresh:`)
-    candidates: list[tuple[str, Any, Any]] = field(default_factory=list)
+    candidates: list[_Candidate] = field(default_factory=list)
     substitutions: dict[str, Any] = field(default_factory=dict)
     untrackable: list[str] = field(default_factory=list)
     # The raw `platform:` of every `ota:` entry.
@@ -240,7 +252,9 @@ class _Gathered:
             if key == "external_components":
                 for entry in self._items(key, value):
                     if isinstance(entry, dict):
-                        self.candidates.append((key, entry.get("source"), entry.get("refresh")))
+                        self.candidates.append(
+                            _Candidate(key, entry.get("source"), entry.get("refresh"))
+                        )
             elif key == "packages":
                 for package in self._items(key, value):
                     self._add_package(package)
@@ -255,12 +269,12 @@ class _Gathered:
         if isinstance(package, str):
             # Only remote packages are strings: the `github://` shorthand.
             self.remote_packages = True
-            self.candidates.append(("packages", package, None))
+            self.candidates.append(_Candidate("packages", package, None))
         elif isinstance(package, dict) and "url" in package:
             # A remote package is tracked itself, but its files are not read (ADR-0006).
             self.remote_packages = True
             self.candidates.append(
-                ("packages", {**package, "type": "git"}, package.get("refresh"))
+                _Candidate("packages", {**package, "type": "git"}, package.get("refresh"))
             )
         else:
             self.add(package)

@@ -391,7 +391,7 @@ packages:
 """
     )
 
-    assert [source.name for source in discovery.stale_refresh] == [
+    assert [source.name for source in discovery.wrong_refresh_policy] == [
         "daily",
         "default",
         "shorthand",
@@ -410,7 +410,7 @@ packages:
 """
     )
 
-    assert [source.name for source in discovery.stale_refresh] == ["shared"]
+    assert [source.name for source in discovery.wrong_refresh_policy] == ["shared"]
 
 
 async def test_a_single_ota_mapping_rather_than_a_list_is_found() -> None:
@@ -425,4 +425,4 @@ async def test_any_zero_refresh_period_or_always_refreshes_on_every_build(refres
         f"external_components:\n  - source: github://someone/fresh\n    refresh: {refresh}\n"
     )
 
-    assert discovery.stale_refresh == ()
+    assert discovery.wrong_refresh_policy == ()

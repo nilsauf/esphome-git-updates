@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Generator
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -11,6 +12,8 @@ import pytest
 from aiohasupervisor import SupervisorNotFoundError
 from aiohttp import ClientWebSocketResponse
 from homeassistant.core import HomeAssistant
+
+from git_repo import GitRepo
 
 
 @pytest.fixture(autouse=True)
@@ -56,3 +59,9 @@ def supervisor(hass: HomeAssistant) -> Generator[MagicMock]:
     client.addons.addon_info = addon_info
     with patch("homeassistant.components.hassio.get_supervisor_client", return_value=client):
         yield client
+
+
+@pytest.fixture
+def marsrelay(tmp_path: Path) -> GitRepo:
+    """A Git Source's remote, with one commit on main."""
+    return GitRepo(tmp_path / "marsrelay")

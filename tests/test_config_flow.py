@@ -17,9 +17,7 @@ from custom_components.esphome_git_updates.const import DOMAIN
 from fake_device_builder import load_fixture, port_of, serve, server_info
 
 
-@pytest.fixture(autouse=True)
-def _enable_custom_integrations(enable_custom_integrations: None) -> None:
-    """Let Home Assistant load the integration from custom_components/."""
+pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
 
 @pytest.fixture(autouse=True)

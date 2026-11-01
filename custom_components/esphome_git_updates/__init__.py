@@ -16,7 +16,7 @@ from .coordinator import (
     protocol_issue_id,
 )
 from .git_coordinator import GitSourcesCoordinator
-from .pre_install import delete_pre_install_issues
+from .pre_install import missing_ota_issue_id, refresh_policy_issue_id
 
 PLATFORMS = [Platform.UPDATE]
 
@@ -49,6 +49,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: EsphomeGitUpdatesConfig
 
 async def async_remove_entry(hass: HomeAssistant, entry: EsphomeGitUpdatesConfigEntry) -> None:
     """Forget a removed Tracked Config: its stored versions and its Repair issues."""
-    ir.async_delete_issue(hass, DOMAIN, protocol_issue_id(entry.entry_id))
-    delete_pre_install_issues(hass, entry.entry_id)
+    for issue_id in (protocol_issue_id, missing_ota_issue_id, refresh_policy_issue_id):
+        ir.async_delete_issue(hass, DOMAIN, issue_id(entry.entry_id))
     await TrackedConfigStore(hass, entry.entry_id).async_remove()
