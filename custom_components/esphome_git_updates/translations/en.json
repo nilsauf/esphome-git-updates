@@ -39,13 +39,21 @@
         "data": {
           "configuration": "Configuration"
         }
+      },
+      "device": {
+        "title": "Linked Device",
+        "description": "The device {name} already has in Home Assistant, from the ESPHome or MQTT integration. The update entity is added to it, and the ESPHome version it reports is the installed one. Leave empty to give the update entity a device of its own.",
+        "data": {
+          "device_id": "Device"
+        }
       }
     },
     "error": {
       "addon_not_found": "Neither the ESPHome add-on with this slug nor a Device Builder discovered by Home Assistant's ESPHome integration was found.",
       "cannot_connect": "Could not connect to the Device Builder.",
       "invalid_auth": "The Device Builder refused the username or password.",
-      "unsupported_version": "This Device Builder version is not supported."
+      "unsupported_version": "This Device Builder version is not supported.",
+      "not_linkable_device": "Pick a device of the ESPHome or MQTT integration."
     },
     "abort": {
       "already_configured": "This configuration is already tracked.",

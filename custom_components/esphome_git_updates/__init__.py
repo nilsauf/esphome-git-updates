@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from homeassistant.const import Platform
+from homeassistant.const import CONF_DEVICE_ID, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
@@ -16,6 +16,7 @@ from .coordinator import (
     protocol_issue_id,
 )
 from .git_coordinator import GitSourcesCoordinator
+from .linked_device import LinkedDevice
 from .pre_install import missing_ota_issue_id, refresh_policy_issue_id
 
 PLATFORMS = [Platform.UPDATE]
@@ -28,16 +29,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: EsphomeGitUpdatesConfigE
     issue = ProtocolIssue(hass, entry)
     coordinator = EsphomeVersionCoordinator(hass, entry, issue)
     await coordinator.async_config_entry_first_refresh()
-    if store.installed_esphome_version is None:
+    if CONF_DEVICE_ID not in entry.data and store.installed_esphome_version is None:
         # Seeding: a new entry assumes the device already runs the Available
         # ESPHome Version, so it shows no update until the Device Builder's
-        # ESPHome changes. ADR-0003's Linked Device reading replaces this later.
+        # ESPHome changes. An entry with a Linked Device is never seeded, even
+        # when that device has since gone (ADR-0003).
         await store.async_set_installed_esphome_version(coordinator.data)
+    linked_device = LinkedDevice.of(hass, entry)
     git_coordinator = GitSourcesCoordinator(hass, entry, store, issue)
     # Not a first refresh: Git Sources that cannot be read must not hold up
     # the ESPHome update. The poller logs why and tries again in 30 min.
     await git_coordinator.async_refresh()
-    entry.runtime_data = RuntimeData(coordinator, git_coordinator, store)
+    entry.runtime_data = RuntimeData(coordinator, git_coordinator, store, linked_device)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 

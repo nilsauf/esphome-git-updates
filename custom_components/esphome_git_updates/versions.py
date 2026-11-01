@@ -2,10 +2,28 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 # Home Assistant drops a longer release_summary.
 _MAX_SUMMARY = 255
+
+# An ESPHome version: `<year>.<month>.<patch>`, maybe with a suffix (`b1`, `-dev`).
+_ESPHOME_VERSION = r"\d{4}\.\d{1,2}\.\d+[0-9A-Za-z.+-]*"
+# `<project_version> (ESPHome <ver>)`, when the YAML sets `esphome: project:`.
+_PROJECT_SW_VERSION = re.compile(rf"\S.* \(ESPHome (?P<esphome>{_ESPHOME_VERSION})\)")
+# `<ver> (config hash 0x…)` over MQTT, `<ver> (<compile time>)` or `<ver>` over the native API.
+_PLAIN_SW_VERSION = re.compile(rf"(?P<esphome>{_ESPHOME_VERSION})(?: \(.*\))?")
+
+
+def parse_sw_version(sw_version: str | None) -> str | None:
+    """The ESPHome version in a Linked Device's registry `sw_version`, or None (ADR-0003)."""
+    if not sw_version:
+        return None
+    for pattern in (_PROJECT_SW_VERSION, _PLAIN_SW_VERSION):
+        if (match := pattern.fullmatch(sw_version.strip())) is not None:
+            return match.group("esphome")
+    return None
 
 
 @dataclass(frozen=True)

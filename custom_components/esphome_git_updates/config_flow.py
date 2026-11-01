@@ -1,4 +1,5 @@
-"""Config flow: locate the Device Builder, then pick one Tracked Config (ADR-0001)."""
+"""Config flow: locate the Device Builder, pick one Tracked Config (ADR-0001), then
+optionally its Linked Device (ADR-0005)."""
 
 from __future__ import annotations
 
@@ -6,9 +7,13 @@ from typing import Any
 
 import probatio
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
-from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME
+from homeassistant.const import CONF_DEVICE_ID, CONF_PASSWORD, CONF_URL, CONF_USERNAME
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.hassio import is_hassio
 from homeassistant.helpers.selector import (
+    DeviceFilterSelectorConfig,
+    DeviceSelector,
+    DeviceSelectorConfig,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -16,9 +21,10 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
     TextSelectorType,
 )
+from homeassistant.util import slugify
 
 from .connection import CONNECTION_ERRORS, connect_to_device_builder
-from .const import CONF_CONFIGURATION, DOMAIN
+from .const import CONF_CONFIGURATION, DOMAIN, LINKED_DEVICE_DOMAINS
 from .device_builder import (
     AuthenticationFailed,
     Configuration,
@@ -49,6 +55,7 @@ class EsphomeGitUpdatesConfigFlow(ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         self._location: dict[str, str] = {}
         self._configurations: dict[str, Configuration] = {}
+        self._chosen: Configuration | None = None
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Offer the ESPHome add-on on a Supervisor install, else ask for a URL."""
@@ -72,10 +79,8 @@ class EsphomeGitUpdatesConfigFlow(ConfigFlow, domain=DOMAIN):
             chosen = self._configurations[user_input[CONF_CONFIGURATION]]
             await self.async_set_unique_id(chosen.configuration)
             self._abort_if_unique_id_configured()
-            return self.async_create_entry(
-                title=chosen.friendly_name or chosen.name,
-                data={**self._location, CONF_CONFIGURATION: chosen.configuration},
-            )
+            self._chosen = chosen
+            return await self.async_step_device()
         options = [
             SelectOptionDict(value=c.configuration, label=c.friendly_name or c.name)
             for c in self._configurations.values()
@@ -86,6 +91,69 @@ class EsphomeGitUpdatesConfigFlow(ConfigFlow, domain=DOMAIN):
                 {probatio.Required(CONF_CONFIGURATION): SelectSelector(SelectSelectorConfig(options=options))}
             ),
         )
+
+    async def async_step_device(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Optionally pick the Linked Device: the ESPHome or MQTT device the
+        Tracked Config already has in Home Assistant."""
+        chosen = self._chosen
+        assert chosen is not None
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            device_id = user_input.get(CONF_DEVICE_ID)
+            if device_id is None or self._is_linkable(device_id):
+                linked = {} if device_id is None else {CONF_DEVICE_ID: device_id}
+                return self.async_create_entry(
+                    title=chosen.friendly_name or chosen.name,
+                    data={**self._location, CONF_CONFIGURATION: chosen.configuration, **linked},
+                )
+            errors[CONF_DEVICE_ID] = "not_linkable_device"
+        schema = probatio.Schema(
+            {
+                probatio.Optional(CONF_DEVICE_ID): DeviceSelector(
+                    DeviceSelectorConfig(
+                        filter=[
+                            DeviceFilterSelectorConfig(integration=domain)
+                            for domain in LINKED_DEVICE_DOMAINS
+                        ]
+                    )
+                )
+            }
+        )
+        if user_input is None and (match := self._matching_device(chosen)) is not None:
+            user_input = {CONF_DEVICE_ID: match}
+        return self.async_show_form(
+            step_id="device",
+            data_schema=self.add_suggested_values_to_schema(schema, user_input),
+            errors=errors,
+            description_placeholders={"name": chosen.name},
+        )
+
+    def _linkable_devices(self) -> list[dr.DeviceEntry]:
+        """The devices of the ESPHome and MQTT integrations."""
+        registry = dr.async_get(self.hass)
+        return [
+            device
+            for domain in LINKED_DEVICE_DOMAINS
+            for entry in self.hass.config_entries.async_entries(domain)
+            for device in dr.async_entries_for_config_entry(registry, entry.entry_id)
+        ]
+
+    def _is_linkable(self, device_id: str) -> bool:
+        return any(device.id == device_id for device in self._linkable_devices())
+
+    def _matching_device(self, chosen: Configuration) -> str | None:
+        """The one linkable device named like the YAML's `esphome: name:`, if any.
+
+        The Device Builder's list gives that name and the friendly name; the
+        registry holds the friendly name when the device has one.
+        """
+        names = {slugify(name) for name in (chosen.name, chosen.friendly_name) if name}
+        matches = {
+            device.id
+            for device in self._linkable_devices()
+            if device.name and slugify(device.name) in names
+        }
+        return next(iter(matches)) if len(matches) == 1 else None
 
     async def _async_step_location(
         self, step_id: str, schema: probatio.Schema, user_input: dict[str, Any] | None

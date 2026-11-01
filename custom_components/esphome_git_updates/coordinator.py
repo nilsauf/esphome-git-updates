@@ -19,6 +19,7 @@ from .device_builder import ActiveJob, UnexpectedFrame, UnsupportedServerVersion
 
 if TYPE_CHECKING:
     from .git_coordinator import GitSourcesCoordinator
+    from .linked_device import LinkedDevice
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class RuntimeData:
     coordinator: EsphomeVersionCoordinator
     git_coordinator: GitSourcesCoordinator
     store: TrackedConfigStore
+    linked_device: LinkedDevice | None
 
 
 type EsphomeGitUpdatesConfigEntry = ConfigEntry[RuntimeData]

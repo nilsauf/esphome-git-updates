@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from custom_components.esphome_git_updates.versions import SourceCommits, Versions
+import pytest
+
+from custom_components.esphome_git_updates.versions import SourceCommits, Versions, parse_sw_version
 
 OLD = "abc1234aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 NEW = "def5678bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -54,3 +56,32 @@ def test_a_changed_git_source_alone_is_summarised_without_esphome() -> None:
     versions = Versions("2026.10.1", "2026.10.1", (SourceCommits("marsrelay", OLD, NEW),))
 
     assert versions.release_summary == "marsrelay abc1234 → def5678"
+
+
+@pytest.mark.parametrize(
+    ("sw_version", "esphome_version"),
+    [
+        # ESPHome over MQTT discovery.
+        ("2026.10.1 (config hash 0x1a2b3c4d)", "2026.10.1"),
+        # ESPHome over the native API.
+        ("2026.10.1 (Oct 31 2026, 12:34:56)", "2026.10.1"),
+        # Either, with `esphome: project:` set.
+        ("1.4.0 (ESPHome 2026.10.1)", "2026.10.1"),
+        ("v2-beta (ESPHome 2026.11.0b2)", "2026.11.0b2"),
+        # The native API without a compilation time.
+        ("2026.10.1", "2026.10.1"),
+        ("2026.11.0-dev (config hash 0x00000001)", "2026.11.0-dev"),
+    ],
+)
+def test_the_esphome_version_is_parsed_from_sw_version(
+    sw_version: str, esphome_version: str
+) -> None:
+    assert parse_sw_version(sw_version) == esphome_version
+
+
+@pytest.mark.parametrize(
+    "sw_version",
+    [None, "", "unknown", "1.4.0", "firmware (2026.10.1)", "1.4.0 (ESPHome )", "(ESPHome 2026.10.1)"],
+)
+def test_a_sw_version_that_names_no_esphome_version_is_not_parsed(sw_version: str | None) -> None:
+    assert parse_sw_version(sw_version) is None

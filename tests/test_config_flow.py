@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,6 +12,7 @@ from homeassistant import config_entries
 from homeassistant.config_entries import ConfigFlowResult
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import device_registry as dr
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.esphome_git_updates.const import DOMAIN
@@ -27,6 +29,18 @@ def _no_setup() -> Generator[AsyncMock]:
         "custom_components.esphome_git_updates.async_setup_entry", return_value=True
     ) as setup:
         yield setup
+
+
+async def _pick(
+    hass: HomeAssistant, result: ConfigFlowResult, configuration: str, **device: str
+) -> ConfigFlowResult:
+    """Pick *configuration*, then the Linked Device (none unless *device* gives `device_id`)."""
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"configuration": configuration}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "device"
+    return await hass.config_entries.flow.async_configure(result["flow_id"], dict(device))
 
 
 async def _start_addon(hass: HomeAssistant, **user_input: str) -> ConfigFlowResult:
@@ -52,9 +66,7 @@ async def test_the_esphome_add_on_is_found_through_the_supervisor(
 
     assert fake.mismatches == []
     assert result["step_id"] == "configuration"
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"configuration": "host-node.yaml"}
-    )
+    result = await _pick(hass, result, "host-node.yaml")
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"] == {"addon_slug": "5c53de3b_esphome", "configuration": "host-node.yaml"}
 
@@ -67,9 +79,7 @@ async def test_a_non_standard_add_on_slug_can_be_given(
         result = await _start_addon(hass, addon_slug="local_esphome")
 
     assert result["step_id"] == "configuration"
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"configuration": "host-node.yaml"}
-    )
+    result = await _pick(hass, result, "host-node.yaml")
     assert result["data"] == {"addon_slug": "local_esphome", "configuration": "host-node.yaml"}
 
 
@@ -123,6 +133,8 @@ async def test_the_chosen_configuration_becomes_the_tracked_config(hass: HomeAss
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {"configuration": "host-node.yaml"}
     )
+    assert result["step_id"] == "device"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "host-node"
@@ -178,3 +190,85 @@ async def test_a_configuration_that_is_already_tracked_is_refused(hass: HomeAssi
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
+
+
+def _device(
+    hass: HomeAssistant, domain: str, name: str, mac: str = "aa:bb:cc:dd:ee:ff"
+) -> dr.DeviceEntry:
+    """A device of another integration's config entry."""
+    entry = MockConfigEntry(domain=domain)
+    entry.add_to_hass(hass)
+    return dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id,
+        connections={(dr.CONNECTION_NETWORK_MAC, mac)},
+        name=name,
+    )
+
+
+def _device_selector(result: ConfigFlowResult) -> tuple[dict[str, Any], str | None]:
+    """The device step's selector config, and the device it pre-selects."""
+    schema = result["data_schema"]
+    assert schema is not None
+    (key,) = schema.schema
+    assert key == "device_id"
+    suggested = (key.description or {}).get("suggested_value")
+    return schema.schema[key].config, suggested
+
+
+async def _to_device_step(hass: HomeAssistant) -> ConfigFlowResult:
+    async with serve(load_fixture("auth_login_list")) as (url, _):
+        result = await _start(hass, url, username="admin", password="secret")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"configuration": "host-node.yaml"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "device"
+    return result
+
+
+async def test_the_device_picker_offers_esphome_and_mqtt_devices_and_pre_selects_the_yamls_name(
+    hass: HomeAssistant,
+) -> None:
+    _device(hass, "esphome", "kitchen", mac="11:22:33:44:55:66")
+    # Another integration's device of the same name is not the one.
+    _device(hass, "zha", "host-node", mac="22:33:44:55:66:77")
+    # The registry's name is the friendly one: `Host Node` for `name: host-node`.
+    linked = _device(hass, "esphome", "Host Node")
+
+    result = await _to_device_step(hass)
+
+    config, suggested = _device_selector(result)
+    assert config["filter"] == [{"integration": "esphome"}, {"integration": "mqtt"}]
+    assert suggested == linked.id
+
+
+async def test_without_a_matching_device_nothing_is_pre_selected(hass: HomeAssistant) -> None:
+    _device(hass, "mqtt", "kitchen")
+
+    result = await _to_device_step(hass)
+
+    assert _device_selector(result)[1] is None
+
+
+async def test_the_picked_device_becomes_the_linked_device(hass: HomeAssistant) -> None:
+    linked = _device(hass, "mqtt", "host-node")
+    result = await _to_device_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"device_id": linked.id}
+    )
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"]["device_id"] == linked.id
+
+
+async def test_a_device_of_another_integration_is_refused(hass: HomeAssistant) -> None:
+    other = _device(hass, "zha", "host-node")
+    result = await _to_device_step(hass)
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"device_id": other.id}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"device_id": "not_linkable_device"}

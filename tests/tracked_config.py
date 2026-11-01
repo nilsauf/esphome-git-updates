@@ -20,13 +20,13 @@ CONFIGURATION = "host-node.yaml"
 OTA = "ota:\n  - platform: esphome\n"
 
 
-async def set_up(hass: HomeAssistant, fake: FakeDeviceBuilder) -> MockConfigEntry:
-    """Set up the entry `tracked` for CONFIGURATION on *fake*."""
+async def set_up(hass: HomeAssistant, fake: FakeDeviceBuilder, **data: str) -> MockConfigEntry:
+    """Set up the entry `tracked` for CONFIGURATION on *fake*, with any further *data*."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="host-node",
         unique_id=CONFIGURATION,
-        data={"url": fake.url, "configuration": CONFIGURATION},
+        data={"url": fake.url, "configuration": CONFIGURATION, **data},
         entry_id="tracked",
     )
     entry.add_to_hass(hass)

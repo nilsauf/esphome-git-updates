@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, NoReturn
 
@@ -12,10 +13,11 @@ from homeassistant.components.update import (
     UpdateEntity,
     UpdateEntityFeature,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo, EventDeviceRegistryUpdatedData
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.event import async_track_device_registry_updated_event
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .connection import CONNECTION_ERRORS, connect_to_device_builder
@@ -41,8 +43,10 @@ from .install_log import (
     OUTCOME_UNKNOWN_TEXT,
     InstallLog,
 )
+from .linked_device import LinkedDevice
 from .versions import SourceCommits, Versions
 
+_LOGGER = logging.getLogger(__name__)
 
 # Starts or resumes an Install's jobs on a connected client.
 _StartJobs = Callable[[DeviceBuilderClient, InstallLog, JobsCallback], Awaitable[InstallResult]]
@@ -61,8 +65,8 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
     """Offers an update when any Source differs from what is installed.
 
     The Sources are the ESPHome version (polled by the coordinator) and every
-    Git Source on a Floating Ref (polled by the git coordinator). Until a
-    Linked Device is supported, it sits on a device of its own.
+    Git Source on a Floating Ref (polled by the git coordinator). It sits on
+    the Linked Device if there is one, else on a device of its own (ADR-0005).
     """
 
     _attr_has_entity_name = True
@@ -77,18 +81,57 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         self._notification_id = f"{DOMAIN}_{entry.entry_id}_install"
         self._store: TrackedConfigStore = entry.runtime_data.store
         self._git: GitSourcesCoordinator = entry.runtime_data.git_coordinator
+        self._linked: LinkedDevice | None = entry.runtime_data.linked_device
+        # Whether the unknown Installed ESPHome Version has been warned about.
+        self._warned_unknown = False
         self._attr_unique_id = entry.entry_id
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name=entry.title,
-            model=entry.data[CONF_CONFIGURATION],
-        )
+        if self._linked is not None:
+            # Set explicitly: HA no longer merges devices across config entries.
+            self.device_entry = self._linked.device_entry
+        else:
+            self._attr_device_info = DeviceInfo(
+                identifiers={(DOMAIN, entry.entry_id)},
+                name=entry.title,
+                model=entry.data[CONF_CONFIGURATION],
+            )
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         self.async_on_remove(self._git.async_add_listener(self._handle_coordinator_update))
+        if self._linked is not None:
+            self.async_on_remove(
+                async_track_device_registry_updated_event(
+                    self.hass, self._linked.device_id, self._linked_device_updated
+                )
+            )
+            self._warn_if_installed_unknown()
         if (active := self._store.active_install) is not None:
             self._reattach(active)
+
+    @callback
+    def _linked_device_updated(self, event: Event[EventDeviceRegistryUpdatedData]) -> None:
+        if event.data["action"] == "update" and "sw_version" in event.data["changes"]:
+            self._warn_if_installed_unknown()
+            self.async_write_ha_state()
+
+    def _installed_esphome(self) -> str | None:
+        """What the Linked Device reports, else what the last Install recorded (ADR-0003)."""
+        reported = self._linked.esphome_version if self._linked is not None else None
+        return reported or self._store.installed_esphome_version
+
+    def _warn_if_installed_unknown(self) -> None:
+        """Warn once while the Installed ESPHome Version is unknown, so no update shows."""
+        if self._installed_esphome() is not None:
+            self._warned_unknown = False
+            return
+        if not self._warned_unknown:
+            _LOGGER.warning(
+                "%s: the installed ESPHome version is unknown, so no update is shown: "
+                "its Linked Device reports sw_version %r, and no Install has succeeded yet",
+                self._entry.title,
+                self._linked.sw_version if self._linked is not None else None,
+            )
+            self._warned_unknown = True
 
     @property
     def installed_version(self) -> str | None:
@@ -104,7 +147,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
 
     def _versions(self) -> Versions:
         return Versions(
-            installed_esphome=self._store.installed_esphome_version,
+            installed_esphome=self._installed_esphome(),
             available_esphome=self.coordinator.data,
             git_sources=tuple(
                 SourceCommits(
@@ -151,7 +194,14 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
 
         The Install counts as in progress from here, so a second press while
         this check runs is refused rather than starting a second Install.
+        A Linked Device that looks offline is refused first: the Device Builder
+        would only defer the Install.
         """
+        if self._linked is not None and self._linked.is_offline(self.entity_id):
+            raise HomeAssistantError(
+                f"Install of {self._entry.title} refused: device offline "
+                "(every entity of its Linked Device is unavailable)"
+            )
         self._attr_in_progress = True
         self.async_write_ha_state()
         try:
