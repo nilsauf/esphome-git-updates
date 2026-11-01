@@ -63,16 +63,18 @@
   "options": {
     "step": {
       "init": {
-        "title": "Install and polling options",
+        "title": "Install, polling and release notes options",
         "data": {
           "clean_build": "Clean Build",
           "git_poll_interval": "Git poll interval",
-          "upload_address": "Upload address"
+          "upload_address": "Upload address",
+          "github_token": "GitHub token"
         },
         "data_description": {
           "clean_build": "Delete the build directory, locally and on connected remote build servers, before each compile. It does not fetch Git Sources again: that takes `refresh: always` in the YAML.",
           "git_poll_interval": "How often, in minutes, the YAML is read again and each Git Source's latest commit is fetched.",
-          "upload_address": "Where to upload the firmware. OTA uploads over the air to the device's own address; give an IP address or hostname to upload there instead."
+          "upload_address": "Where to upload the firmware. OTA uploads over the air to the device's own address; give an IP address or hostname to upload there instead.",
+          "github_token": "Optional. Used only to list the commits of GitHub Sources in the release notes; it raises GitHub's limit of 60 requests an hour. A fine-grained token with no permissions is enough for public repositories."
         }
       }
     }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from custom_components.esphome_git_updates.github import Commit, Comparison
 from custom_components.esphome_git_updates.versions import SourceCommits, Versions, parse_sw_version
 
 OLD = "abc1234aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -56,6 +57,81 @@ def test_a_changed_git_source_alone_is_summarised_without_esphome() -> None:
     versions = Versions("2026.10.1", "2026.10.1", (SourceCommits("marsrelay", OLD, NEW),))
 
     assert versions.release_summary == "marsrelay abc1234 → def5678"
+
+
+def _commit(sha: str, message: str) -> Commit:
+    return Commit(sha, message, f"https://github.com/nilsauf/marsrelay/commit/{sha}")
+
+
+THREE = Comparison(
+    total_commits=3,
+    commits=(
+        _commit("1111111" + "a" * 33, "Add relay timer\n\nLonger body."),
+        _commit("2222222" + "a" * 33, "Fix debounce"),
+        _commit(NEW, "Bump version"),
+    ),
+)
+
+
+def test_a_compared_github_source_is_summarised_with_its_commit_count() -> None:
+    versions = Versions(
+        "2026.10.1",
+        "2026.10.1",
+        (
+            SourceCommits("marsrelay", OLD, NEW, THREE),
+            SourceCommits("sensors", SENSORS, NEW, Comparison(1, (_commit(NEW, "One"),))),
+        ),
+    )
+
+    assert versions.release_summary == (
+        "marsrelay abc1234 → def5678 (3 commits); sensors 1234567 → def5678 (1 commit)"
+    )
+
+
+def test_the_release_notes_list_a_github_sources_commits_after_the_esphome_change() -> None:
+    versions = Versions("2026.10.1", "2026.10.2", (SourceCommits("marsrelay", OLD, NEW, THREE),))
+
+    assert versions.release_notes == (
+        "### ESPHome\n"
+        "2026.10.1 → 2026.10.2\n"
+        "\n"
+        "### marsrelay\n"
+        "abc1234 → def5678 (3 commits)\n"
+        "\n"
+        "- [`1111111`](https://github.com/nilsauf/marsrelay/commit/1111111" + "a" * 33 + ") "
+        "Add relay timer\n"
+        "- [`2222222`](https://github.com/nilsauf/marsrelay/commit/2222222" + "a" * 33 + ") "
+        "Fix debounce\n"
+        f"- [`def5678`](https://github.com/nilsauf/marsrelay/commit/{NEW}) Bump version"
+    )
+
+
+def test_the_release_notes_show_only_the_sha_change_of_an_uncompared_source() -> None:
+    versions = Versions("2026.10.1", "2026.10.1", (SourceCommits("marsrelay", OLD, NEW),))
+
+    assert versions.release_notes == "### marsrelay\nabc1234 → def5678"
+
+
+def test_the_release_notes_show_only_the_latest_commit_when_the_installed_one_is_unknown() -> None:
+    versions = Versions("2026.10.1", "2026.10.1", (SourceCommits("marsrelay", None, NEW),))
+
+    assert versions.release_notes == "### marsrelay\nLatest commit def5678"
+
+
+def test_unchanged_sources_have_no_release_notes() -> None:
+    versions = Versions(
+        "2026.10.1", "2026.10.1", (SourceCommits("marsrelay", OLD, OLD), SourceCommits("s", NEW, NEW))
+    )
+
+    assert versions.release_notes is None
+
+
+def test_commits_github_did_not_list_are_counted_at_the_end() -> None:
+    comparison = Comparison(300, (_commit(NEW, "First listed"),))
+    versions = Versions("2026.10.1", "2026.10.1", (SourceCommits("marsrelay", OLD, NEW, comparison),))
+
+    assert versions.release_notes is not None
+    assert versions.release_notes.endswith(") First listed\n- … and 299 more")
 
 
 @pytest.mark.parametrize(

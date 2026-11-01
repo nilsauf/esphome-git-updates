@@ -25,6 +25,7 @@ from .device_builder import (
     UnexpectedFrame,
     UnsupportedServerVersion,
 )
+from .comparisons import GitHubComparisons, SourceChange
 from .git_remote import GitRemoteError, RefKind, RemoteRef, resolve_ref
 from .git_sources import (
     Discovery,
@@ -71,7 +72,8 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
     (ADR-0006), then asks every remote with `git ls-remote`. A remote that
     cannot be asked keeps its last known Latest Commit. Newly seen Sources
     are seeded with their Latest Commit, so they show no update until the
-    next push (ADR-0003).
+    next push (ADR-0003). Each changed Git Source on GitHub is then
+    compared over GitHub's API, for release notes only.
     """
 
     config_entry: EsphomeGitUpdatesConfigEntry
@@ -97,6 +99,7 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
         self._pre_install_issues = PreInstallIssues(hass, entry)
         # What the YAML said at the last successful poll.
         self._pre_install_check: PreInstallCheck | None = None
+        self.comparisons = GitHubComparisons(hass, entry)
 
     async def _async_update_data(self) -> dict[str, TrackedGitSource]:
         discovery = await self._discover()
@@ -124,6 +127,7 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
             _latest_commits(tracked), {source.key for source in discovery.sources}
         )
         self._check(discovery, tracked)
+        await self.comparisons.async_update(self._changes(tracked))
         return tracked
 
     def _check(self, discovery: Discovery, tracked: dict[str, TrackedGitSource]) -> None:
@@ -163,6 +167,21 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
             return
         self.update_interval = interval
         await self.async_refresh()
+
+    async def async_compare_changed(self) -> None:
+        """Ask GitHub again for any change whose comparison is missing."""
+        if await self.comparisons.async_update(self._changes(self.data or {})):
+            self.async_update_listeners()
+
+    def _changes(self, tracked: dict[str, TrackedGitSource]) -> list[SourceChange]:
+        """The tracked Sources whose Latest Commit differs from a known Installed Commit."""
+        changes = []
+        for key, tracked_source in tracked.items():
+            installed = self._store.installed_commit(key)
+            latest = tracked_source.latest_commit
+            if installed is not None and installed != latest:
+                changes.append(SourceChange(key, tracked_source.source.url, installed, latest))
+        return changes
 
     def latest_commits(self) -> dict[str, str]:
         """The Latest Commit last seen of each tracked Git Source, by key."""

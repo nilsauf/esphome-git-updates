@@ -22,12 +22,12 @@ class GitRepo:
     def url(self) -> str:
         return self.path.as_uri()
 
-    def push(self, branch: str = "main") -> str:
+    def push(self, branch: str = "main", message: str | None = None) -> str:
         """Add a commit to *branch* (created from the current one if new); return its sha."""
         if branch != self._git("branch", "--show-current"):
             exists = self._git("branch", "--list", branch)
             self._git("checkout", "--quiet", *([] if exists else ["-b"]), branch)
-        self._git("commit", "--quiet", "--allow-empty", "-m", f"commit on {branch}")
+        self._git("commit", "--quiet", "--allow-empty", "-m", message or f"commit on {branch}")
         return self.latest_commit(branch)
 
     def tag(self, name: str) -> str:
@@ -36,6 +36,15 @@ class GitRepo:
 
     def latest_commit(self, ref: str = "main") -> str:
         return self._git("rev-parse", ref)
+
+    def commits(self, base: str, head: str) -> list[tuple[str, str]]:
+        """Each commit after *base* up to *head*, oldest first, with its full message."""
+        log = self._git("log", "--reverse", "--format=%H%x00%B%x1e", f"{base}..{head}")
+        entries = [entry.strip("\n") for entry in log.split("\x1e")]
+        return [
+            (sha, message.strip())
+            for sha, _, message in (entry.partition("\x00") for entry in entries if entry)
+        ]
 
     def _git(self, *args: str) -> str:
         return subprocess.run(

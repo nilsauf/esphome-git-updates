@@ -300,7 +300,12 @@ async def test_the_options_can_be_changed_and_are_shown_again_as_set(
     hass: HomeAssistant,
 ) -> None:
     entry, result = await _options_form(hass)
-    chosen = {"clean_build": True, "git_poll_interval": 5, "upload_address": "192.168.1.42"}
+    chosen = {
+        "clean_build": True,
+        "git_poll_interval": 5,
+        "upload_address": "192.168.1.42",
+        "github_token": "ghp_secret",
+    }
 
     result = await hass.config_entries.options.async_configure(result["flow_id"], chosen)
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -320,6 +325,33 @@ async def test_a_blank_upload_address_is_saved_as_ota(hass: HomeAssistant) -> No
     )
 
     assert entry.options["upload_address"] == "OTA"
+
+
+async def test_a_blank_github_token_is_not_saved(hass: HomeAssistant) -> None:
+    entry, result = await _options_form(hass)
+
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"clean_build": False, "git_poll_interval": 30, "upload_address": "OTA", "github_token": " "},
+    )
+
+    assert "github_token" not in entry.options
+
+
+async def test_a_cleared_github_token_is_removed(hass: HomeAssistant) -> None:
+    entry, result = await _options_form(hass)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"clean_build": False, "git_poll_interval": 30, "upload_address": "OTA", "github_token": "t"},
+    )
+    _, result = await _options_form_of(hass, entry)
+
+    # An emptied field is left out of the input.
+    await hass.config_entries.options.async_configure(
+        result["flow_id"], {"clean_build": False, "git_poll_interval": 30, "upload_address": "OTA"}
+    )
+
+    assert "github_token" not in entry.options
 
 
 async def _options_form_of(

@@ -41,6 +41,7 @@ from .device_builder import (
 from .location import CONF_ADDON_SLUG, DEFAULT_ADDON_SLUG, DeviceBuilderNotFound
 from .options import (
     CONF_CLEAN_BUILD,
+    CONF_GITHUB_TOKEN,
     CONF_GIT_POLL_INTERVAL,
     CONF_UPLOAD_ADDRESS,
     DEFAULT_CLEAN_BUILD,
@@ -71,6 +72,9 @@ OPTIONS_SCHEMA = probatio.Schema(
             )
         ),
         probatio.Required(CONF_UPLOAD_ADDRESS, default=DEFAULT_UPLOAD_ADDRESS): str,
+        probatio.Optional(CONF_GITHUB_TOKEN): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.PASSWORD)
+        ),
     }
 )
 
@@ -82,7 +86,7 @@ class EsphomeGitUpdatesConfigFlow(ConfigFlow, domain=DOMAIN):
 
     @staticmethod
     def async_get_options_flow(config_entry: ConfigEntry) -> EsphomeGitUpdatesOptionsFlow:
-        """The options of a Tracked Config: Clean Build, git poll interval, upload address."""
+        """The options of a Tracked Config."""
         return EsphomeGitUpdatesOptionsFlow()
 
     def __init__(self) -> None:
@@ -222,14 +226,16 @@ class EsphomeGitUpdatesConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class EsphomeGitUpdatesOptionsFlow(OptionsFlow):
-    """Clean Build, the git poll interval and the upload address of a Tracked Config."""
+    """How a Tracked Config is installed and polled, and the GitHub token for release notes."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show the options, filled in with the ones set."""
         if user_input is not None:
+            token = user_input.pop(CONF_GITHUB_TOKEN, "").strip()
             return self.async_create_entry(
                 data={
                     **user_input,
+                    **({CONF_GITHUB_TOKEN: token} if token else {}),
                     # The number selector gives a float; the interval is whole minutes.
                     CONF_GIT_POLL_INTERVAL: int(user_input[CONF_GIT_POLL_INTERVAL]),
                     CONF_UPLOAD_ADDRESS: user_input[CONF_UPLOAD_ADDRESS].strip()

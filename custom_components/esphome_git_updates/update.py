@@ -74,7 +74,11 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
     _attr_device_class = UpdateDeviceClass.FIRMWARE
     # PROGRESS so that in_progress is the entity's own: a re-attached Install
     # runs outside async_install. There is no update_percentage yet (ticket 14).
-    _attr_supported_features = UpdateEntityFeature.INSTALL | UpdateEntityFeature.PROGRESS
+    _attr_supported_features = (
+        UpdateEntityFeature.INSTALL
+        | UpdateEntityFeature.PROGRESS
+        | UpdateEntityFeature.RELEASE_NOTES
+    )
 
     def __init__(self, entry: EsphomeGitUpdatesConfigEntry) -> None:
         super().__init__(entry.runtime_data.coordinator)
@@ -146,13 +150,21 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
     def release_summary(self) -> str | None:
         return self._versions().release_summary
 
+    async def async_release_notes(self) -> str | None:
+        """What changed in each Source; GitHub Sources list their commits."""
+        await self._git.async_compare_changed()
+        return self._versions().release_notes
+
     def _versions(self) -> Versions:
         return Versions(
             installed_esphome=self._installed_esphome(),
             available_esphome=self.coordinator.data,
             git_sources=tuple(
                 SourceCommits(
-                    tracked.source.name, self._store.installed_commit(key), tracked.latest_commit
+                    tracked.source.name,
+                    installed := self._store.installed_commit(key),
+                    tracked.latest_commit,
+                    self._git.comparisons.get(key, installed, tracked.latest_commit),
                 )
                 for key, tracked in (self._git.data or {}).items()
             ),

@@ -1,4 +1,4 @@
-"""The options of a Tracked Config: how its Installs run and how often its Git Sources are polled."""
+"""The options of a Tracked Config: how it is installed and polled, and its release notes."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from .device_builder import OTA
 
 CONF_CLEAN_BUILD: Final = "clean_build"
 CONF_GIT_POLL_INTERVAL: Final = "git_poll_interval"
+CONF_GITHUB_TOKEN: Final = "github_token"
 CONF_UPLOAD_ADDRESS: Final = "upload_address"
 
 DEFAULT_CLEAN_BUILD: Final = False
@@ -28,6 +29,8 @@ class Options:
     git_poll_interval: timedelta
     # Where the firmware is uploaded: the `port` of `firmware/install`.
     upload_address: str
+    # Used only to ask GitHub for release notes, at a higher rate limit.
+    github_token: str | None
 
     @classmethod
     def of(cls, options: Mapping[str, Any]) -> Options:
@@ -38,4 +41,5 @@ class Options:
                 minutes=options.get(CONF_GIT_POLL_INTERVAL, DEFAULT_GIT_POLL_INTERVAL)
             ),
             upload_address=options.get(CONF_UPLOAD_ADDRESS) or DEFAULT_UPLOAD_ADDRESS,
+            github_token=options.get(CONF_GITHUB_TOKEN) or None,
         )
