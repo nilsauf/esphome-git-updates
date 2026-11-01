@@ -24,7 +24,15 @@ from .device_builder import (
     UnsupportedServerVersion,
 )
 from .git_remote import GitRemoteError, RefKind, RemoteRef, resolve_ref
-from .git_sources import Discovery, DiscoveryError, GitSource, Reader, discover_git_sources
+from .git_sources import (
+    Discovery,
+    DiscoveryError,
+    GitSource,
+    OtaStatus,
+    Reader,
+    discover_git_sources,
+)
+from .pre_install import PreInstallCheck
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,6 +92,8 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
         self._issue = issue
         self._untrackable: tuple[str, ...] = ()
         self._failing: set[str] = set()
+        # What the YAML said at the last successful poll.
+        self.pre_install_check: PreInstallCheck | None = None
 
     async def _async_update_data(self) -> dict[str, TrackedGitSource]:
         discovery = await self._discover()
@@ -110,7 +120,23 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
         await self._store.async_seed_installed_commits(
             _latest_commits(tracked), {source.key for source in discovery.sources}
         )
+        self._check(discovery, tracked)
         return tracked
+
+    def _check(self, discovery: Discovery, tracked: dict[str, TrackedGitSource]) -> None:
+        """Check the YAML just read for an Install, and raise or clear its Repair issues.
+
+        A remote package may add OTA, so an unknown OTA is not refused.
+        """
+        self.pre_install_check = PreInstallCheck(
+            missing_ota=discovery.ota is OtaStatus.MISSING,
+            stale_refresh=tuple(
+                source.name for source in discovery.stale_refresh if source.key in tracked
+            ),
+        )
+        self.pre_install_check.update_issues(
+            self.hass, self.config_entry.entry_id, self.config_entry.title
+        )
 
     def latest_commits(self) -> dict[str, str]:
         """The Latest Commit last seen of each tracked Git Source, by key."""

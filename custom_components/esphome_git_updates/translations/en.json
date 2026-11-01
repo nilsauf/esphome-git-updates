@@ -61,6 +61,14 @@
       "title": "Unexpected answer from the Device Builder for {title}",
       "description": "The Device Builder that compiles {title} sent something ESPHome Git Updates does not understand, so updates for {title} are paused. This usually means the Device Builder changed its protocol. Details: {error}"
     },
+    "missing_ota": {
+      "title": "{title} cannot be updated over the air",
+      "description": "The YAML of {title} has no `ota:` entry with platform `esphome` or `web_server`, so ESPHome Git Updates refuses to install it. Add one, for example:\n\n```yaml\nota:\n  - platform: esphome\n```\n\nthen flash {title} once over USB so the running firmware accepts over-the-air updates. This issue clears once the YAML is read again."
+    },
+    "refresh_policy": {
+      "title": "Git Sources of {title} may be built from a stale copy",
+      "description": "These Git Sources of {title} lack `refresh: always`: {sources}. ESPHome reuses its cached copy of a Git Source until its refresh time runs out (1 day by default), so an Install could build an old commit while recording the new one. ESPHome Git Updates refuses to install {title} until each of them sets `refresh: always` (or `0s`), for example:\n\n```yaml\nexternal_components:\n  - source: github://owner/repo\n    refresh: always\n```\n\nRemote `packages:` take `refresh: always` too; a `github://` shorthand package cannot, so write it as a mapping with `url:`, `ref:`, `files:` and `refresh: always`. This issue clears once the YAML is read again."
+    },
     "include_refused": {
       "title": "Device Builder refused to read a file of {title}",
       "description": "{title} includes {file}, but the Device Builder refused to read it ({error}). Without it, ESPHome Git Updates cannot see every Git Source of {title}, so their updates are not refreshed. This usually means the Device Builder now restricts which files can be read. If {file} was removed or renamed, fix the include in the YAML."

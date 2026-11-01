@@ -41,9 +41,9 @@ def marsrelay(tmp_path: Path) -> GitRepo:
 def _config(*sources: str) -> str:
     """A Tracked Config whose external components come from *sources* (remote URLs)."""
     entries = "".join(
-        f"  - source:\n      type: git\n      url: {url}\n" for url in sources
+        f"  - source:\n      type: git\n      url: {url}\n    refresh: always\n" for url in sources
     )
-    return f"esphome:\n  name: host-node\nexternal_components:\n{entries}"
+    return f"esphome:\n  name: host-node\nota:\n  - platform: esphome\nexternal_components:\n{entries}"
 
 
 @pytest.fixture
@@ -139,7 +139,7 @@ def _installed_commits(hass_storage: dict[str, Any]) -> dict[str, str]:
     return commits
 
 
-async def test_an_install_records_the_latest_commits_seen_when_it_was_pressed(
+async def test_an_install_records_the_latest_commits_read_again_when_it_was_pressed(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
     marsrelay: GitRepo,
@@ -147,20 +147,18 @@ async def test_an_install_records_the_latest_commits_seen_when_it_was_pressed(
     hass_storage: dict[str, Any],
 ) -> None:
     await _set_up(hass, builder)
-    seen = marsrelay.push()
+    marsrelay.push()
     await _tick(hass, freezer, 30.1)
     assert _state(hass).state == STATE_ON
-    # Pushed after the last poll, so not what Install is pressed for.
-    unseen = marsrelay.push()
+    # Pushed after the last poll: Install reads the Git Sources again first.
+    pressed_for = marsrelay.push()
 
     await _install(hass, builder, "install_clean_success")
 
-    assert _installed_commits(hass_storage) == {f"{marsrelay.url}@HEAD": seen}
+    assert _installed_commits(hass_storage) == {f"{marsrelay.url}@HEAD": pressed_for}
     assert _state(hass).state == STATE_OFF
     await _tick(hass, freezer, 30.1)
-    state = _state(hass)
-    assert state.state == STATE_ON
-    assert state.attributes["release_summary"] == f"marsrelay {seen[:7]} → {unseen[:7]}"
+    assert _state(hass).state == STATE_OFF
 
 
 async def test_a_failed_install_records_no_commits(

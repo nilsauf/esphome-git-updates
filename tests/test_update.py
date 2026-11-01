@@ -46,7 +46,7 @@ async def builder() -> AsyncIterator[tuple[str, FakeDeviceBuilder]]:
     """A Device Builder that compiles with ESPHome 2026.10.1; the config has no Git Sources."""
     async with serve(
         [server_info(esphome_version="2026.10.1")],
-        {"host-node.yaml": "esphome:\n  name: host-node\n"},
+        {"host-node.yaml": "esphome:\n  name: host-node\nota:\n  - platform: esphome\n"},
     ) as served:
         yield served
 
@@ -72,7 +72,7 @@ async def _set_up(hass: HomeAssistant, url: str, **kwargs: Any) -> MockConfigEnt
 async def test_the_add_on_ingress_port_is_looked_up_again_when_the_entry_is_set_up(
     hass: HomeAssistant, supervisor: MagicMock
 ) -> None:
-    files = {"host-node.yaml": "esphome:\n  name: host-node\n"}
+    files = {"host-node.yaml": "esphome:\n  name: host-node\nota:\n  - platform: esphome\n"}
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="host-node",

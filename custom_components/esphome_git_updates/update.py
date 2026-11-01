@@ -125,7 +125,8 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         output stays in the Device Builder, nothing is written to /config.
         """
         configuration = self._entry.data[CONF_CONFIGURATION]
-        # What gets recorded is what the poller saw now, not what the remote
+        await self._check_before_install()
+        # What gets recorded is what the check just read, not what the remote
         # holds once the build is done: a push during the build stays an update.
         commits = self._git.latest_commits()
         task = self._start(
@@ -144,6 +145,29 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
                 "it is picked up again when the integration is set up"
             )
         task.result()
+
+    async def _check_before_install(self) -> None:
+        """Read the YAML again and refuse an Install it cannot take over the air.
+
+        The Install counts as in progress from here, so a second press while
+        this check runs is refused rather than starting a second Install.
+        """
+        self._attr_in_progress = True
+        self.async_write_ha_state()
+        try:
+            await self._git.async_refresh()
+            check = self._git.pre_install_check
+            if not self._git.last_update_success or check is None:
+                raise HomeAssistantError(
+                    f"Install of {self._entry.title} refused: cannot read its YAML to check "
+                    f"it before installing: {self._git.last_exception}"
+                )
+            if (refusal := check.refusal(self._entry.title)) is not None:
+                raise HomeAssistantError(refusal)
+        except BaseException:
+            self._attr_in_progress = False
+            self.async_write_ha_state()
+            raise
 
     def _reattach(self, active: ActiveInstall) -> None:
         """Finish the Install that was running when Home Assistant stopped (ADR-0002)."""

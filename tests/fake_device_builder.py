@@ -13,10 +13,11 @@ replay does not depend on the client numbering its messages the same way.
 A mismatch closes the connection and is recorded in `mismatches`. A
 `{"dir": "close"}` entry makes the server drop the connection at that point.
 
-Once a connection's transcript is done, the server answers
-`devices/get_config` from `files` (path -> raw YAML), the way the Device
-Builder reads its config directory; a path not in `files` gets `not_found`.
-Every path asked for is recorded in `reads`.
+The server answers `devices/get_config` from `files` (path -> raw YAML),
+the way the Device Builder reads its config directory, at any point: reads
+are not part of a transcript, and a connection that only reads files and
+closes is no mismatch. A path not in `files` gets `not_found`. Every path
+asked for is recorded in `reads`.
 
 It also answers `firmware/follow_job` from `jobs` (job id -> the frames' event
 data, `{"event": "output" | "result", "data": ...}`), the way the Device
@@ -120,7 +121,14 @@ class FakeDeviceBuilder:
                 await ws.send_json(frame)
                 continue
             msg = await ws.receive()
+            # File reads are not part of a transcript: they are answered whenever they come.
+            while msg.type == WSMsgType.TEXT and _is_read(sent := json.loads(msg.data), frame):
+                await self._read(ws, sent)
+                msg = await ws.receive()
             if msg.type != WSMsgType.TEXT:
+                if not ids and msg.type in _CLOSING:
+                    # A connection that only read files, like a poll's.
+                    return ws
                 self.mismatches.append(f"expected {frame['command']}, client sent {msg.type.name}")
                 return ws
             sent = json.loads(msg.data)
@@ -151,6 +159,9 @@ class FakeDeviceBuilder:
             self.mismatches.append(f"unexpected after the transcript: {sent}")
             await ws.close()
             return
+        await self._read(ws, sent)
+
+    async def _read(self, ws: web.WebSocketResponse, sent: dict[str, Any]) -> None:
         path = sent["args"]["configuration"]
         self.reads.append(path)
         if path in self.files:
@@ -183,6 +194,14 @@ class FakeDeviceBuilder:
             await ws.send_json({"message_id": message_id, "result": None})
         else:
             self.running.set()
+
+
+_CLOSING = (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED)
+
+
+def _is_read(sent: dict[str, Any], expected: dict[str, Any]) -> bool:
+    """Whether *sent* is a file read where the transcript expects another command."""
+    return bool(sent.get("command") == "devices/get_config" != expected["command"])
 
 
 def job_events(*lines: str, status: str | None = "completed") -> list[dict[str, Any]]:

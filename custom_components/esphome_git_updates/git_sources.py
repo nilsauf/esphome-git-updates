@@ -11,6 +11,7 @@ import re
 from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
+from enum import Enum
 from typing import Any
 
 import yaml
@@ -23,6 +24,9 @@ _GITHUB_SHORTHAND = re.compile(r"github://([^/@]+)/([^/@]+)(/[^@]*)?(?:@(.+))?")
 
 # A ref naming a commit, full or abbreviated: a Pinned Ref.
 _COMMIT_SHA = re.compile(r"[0-9a-f]{7,40}")
+
+# A Refresh Policy of zero time: ESPHome fetches the Source on every build (ADR-0004).
+_ZERO_REFRESH = re.compile(r"0+(\.0+)?\s*[a-z]*")
 
 # Includes nested deeper than this are taken to be a cycle.
 _MAX_INCLUDE_DEPTH = 20
@@ -46,11 +50,28 @@ class GitSource:
         return f"{self.url}@{self.ref or 'HEAD'}"
 
 
+class OtaStatus(Enum):
+    """Whether the YAML lets the device be updated over the air."""
+
+    # An `ota:` entry with platform `esphome` or `web_server`.
+    PRESENT = "present"
+    MISSING = "missing"
+    # None in the files read, but a remote package, which is never read, may add one.
+    UNKNOWN = "unknown"
+
+
+# The `ota:` platforms the Device Builder can upload through.
+_OTA_PLATFORMS = frozenset({"esphome", "web_server"})
+
+
 @dataclass(frozen=True)
 class Discovery:
     sources: tuple[GitSource, ...]
     # One line per Git Source that could not be tracked, saying why.
     untrackable: tuple[str, ...]
+    ota: OtaStatus
+    # The Sources whose Refresh Policy lets ESPHome build a stale cached clone.
+    stale_refresh: tuple[GitSource, ...]
 
 
 @dataclass(frozen=True)
@@ -136,8 +157,9 @@ async def discover_git_sources(configuration: str, read: Reader) -> Discovery:
     gathered = _Gathered()
     gathered.add(config)
     sources: list[GitSource] = []
+    stale: set[str] = set()
     untrackable = list(gathered.untrackable)
-    for where, raw in gathered.candidates:
+    for where, raw, refresh in gathered.candidates:
         value = _substitute(raw, gathered.substitutions)
         secret = _find_secret(value)
         if secret is not None:
@@ -146,7 +168,32 @@ async def discover_git_sources(configuration: str, read: Reader) -> Discovery:
         source = _parse_source(value)
         if source is not None and not _is_pinned_to_a_commit(source):
             sources.append(source)
-    return Discovery(_distinct(sources), tuple(untrackable))
+            if not _refreshes_always(_substitute(refresh, gathered.substitutions)):
+                stale.add(source.key)
+    distinct = _distinct(sources)
+    return Discovery(
+        distinct,
+        tuple(untrackable),
+        _ota_status(gathered),
+        tuple(source for source in distinct if source.key in stale),
+    )
+
+
+def _refreshes_always(refresh: Any) -> bool:
+    """Whether *refresh* is `always` or zero; missing, it is ESPHome's default of 1d."""
+    if refresh is None:
+        return False
+    policy = str(refresh).strip().lower()
+    return policy == "always" or _ZERO_REFRESH.fullmatch(policy) is not None
+
+
+def _ota_status(gathered: _Gathered) -> OtaStatus:
+    platforms = {
+        _substitute(platform, gathered.substitutions) for platform in gathered.ota_platforms
+    }
+    if platforms & _OTA_PLATFORMS:
+        return OtaStatus.PRESENT
+    return OtaStatus.UNKNOWN if gathered.remote_packages else OtaStatus.MISSING
 
 
 def _distinct(sources: list[GitSource]) -> tuple[GitSource, ...]:
@@ -167,10 +214,14 @@ def _distinct(sources: list[GitSource]) -> tuple[GitSource, ...]:
 class _Gathered:
     """The possible Git Sources of a config and of its local packages."""
 
-    # (where it was declared, the raw source or remote package)
-    candidates: list[tuple[str, Any]] = field(default_factory=list)
+    # (where it was declared, the raw source or remote package, its raw `refresh:`)
+    candidates: list[tuple[str, Any, Any]] = field(default_factory=list)
     substitutions: dict[str, Any] = field(default_factory=dict)
     untrackable: list[str] = field(default_factory=list)
+    # The raw `platform:` of every `ota:` entry.
+    ota_platforms: list[Any] = field(default_factory=list)
+    # Whether any remote package was declared; its files are never read.
+    remote_packages: bool = False
 
     def add(self, config: Any) -> None:
         """Gather from *config*, then from its local packages.
@@ -189,18 +240,28 @@ class _Gathered:
             if key == "external_components":
                 for entry in self._items(key, value):
                     if isinstance(entry, dict):
-                        self.candidates.append((key, entry.get("source")))
+                        self.candidates.append((key, entry.get("source"), entry.get("refresh")))
             elif key == "packages":
                 for package in self._items(key, value):
                     self._add_package(package)
+            elif key == "ota":
+                # A list of platforms, or a single one as a mapping.
+                entries = [value] if isinstance(value, dict) and "platform" in value else value
+                for entry in self._items(key, entries):
+                    if isinstance(entry, dict):
+                        self.ota_platforms.append(entry.get("platform"))
 
     def _add_package(self, package: Any) -> None:
         if isinstance(package, str):
             # Only remote packages are strings: the `github://` shorthand.
-            self.candidates.append(("packages", package))
+            self.remote_packages = True
+            self.candidates.append(("packages", package, None))
         elif isinstance(package, dict) and "url" in package:
             # A remote package is tracked itself, but its files are not read (ADR-0006).
-            self.candidates.append(("packages", {**package, "type": "git"}))
+            self.remote_packages = True
+            self.candidates.append(
+                ("packages", {**package, "type": "git"}, package.get("refresh"))
+            )
         else:
             self.add(package)
 

@@ -8,6 +8,7 @@ from custom_components.esphome_git_updates.git_sources import (
     Discovery,
     DiscoveryError,
     GitSource,
+    OtaStatus,
     discover_git_sources,
 )
 
@@ -70,7 +71,7 @@ external_components:
 """
     )
 
-    assert discovery == Discovery((), ())
+    assert discovery.sources == ()
 
 
 @pytest.mark.parametrize(
@@ -89,7 +90,7 @@ external_components:
 """
     )
 
-    assert discovery == Discovery((), ())
+    assert discovery.sources == ()
 
 
 async def test_substitutions_are_applied_to_urls_and_refs() -> None:
@@ -331,3 +332,97 @@ external_components:
     assert discovery.sources == (
         GitSource(name="marsrelay", url="https://github.com/tomquist/marsrelay", ref=None),
     )
+
+
+@pytest.mark.parametrize("platform", ["esphome", "web_server"])
+async def test_an_ota_entry_with_platform_esphome_or_web_server_is_found(platform: str) -> None:
+    discovery = await _discover(f"ota:\n  - platform: http_request\n  - platform: {platform}\n")
+
+    assert discovery.ota is OtaStatus.PRESENT
+
+
+@pytest.mark.parametrize(
+    "main", ["esphome:\n  name: node\n", "ota:\n  - platform: http_request\n"]
+)
+async def test_a_config_without_an_ota_platform_esphome_or_web_server_misses_ota(main: str) -> None:
+    discovery = await _discover(main)
+
+    assert discovery.ota is OtaStatus.MISSING
+
+
+async def test_ota_from_a_local_package_or_include_with_a_substituted_platform_is_found() -> None:
+    discovery = await _discover(
+        "substitutions:\n  updater: esphome\npackages:\n  base: !include base.yaml\n",
+        **{"base.yaml": "ota: !include ota.yaml\n", "ota.yaml": "- platform: ${updater}\n"},
+    )
+
+    assert discovery.ota is OtaStatus.PRESENT
+
+
+async def test_ota_is_unknown_when_a_remote_package_could_provide_it() -> None:
+    discovery = await _discover("packages:\n  remote: github://someone/base/base.yaml@main\n")
+
+    assert discovery.ota is OtaStatus.UNKNOWN
+
+
+async def test_git_sources_without_refresh_always_or_0s_have_a_stale_refresh_policy() -> None:
+    discovery = await _discover(
+        """
+substitutions:
+  never_stale: 0s
+external_components:
+  - source: github://someone/fresh
+    refresh: always
+  - source: github://someone/zero
+    refresh: ${never_stale}
+  - source: github://someone/daily
+    refresh: 1d
+  - source: github://someone/default
+packages:
+  shorthand: github://someone/shorthand/base.yaml@main
+  fresh_package:
+    url: https://gitlab.com/someone/fresh_package
+    files: [base.yaml]
+    refresh: always
+  hourly_package:
+    url: https://gitlab.com/someone/hourly_package
+    files: [base.yaml]
+    refresh: 1h
+"""
+    )
+
+    assert [source.name for source in discovery.stale_refresh] == [
+        "daily",
+        "default",
+        "shorthand",
+        "hourly_package",
+    ]
+
+
+async def test_a_source_declared_twice_is_stale_if_either_declaration_is() -> None:
+    discovery = await _discover(
+        """
+external_components:
+  - source: github://someone/shared
+    refresh: always
+packages:
+  base: github://someone/shared/base.yaml
+"""
+    )
+
+    assert [source.name for source in discovery.stale_refresh] == ["shared"]
+
+
+async def test_a_single_ota_mapping_rather_than_a_list_is_found() -> None:
+    discovery = await _discover("ota:\n  platform: esphome\n  password: hunter2\n")
+
+    assert discovery.ota is OtaStatus.PRESENT
+
+
+@pytest.mark.parametrize("refresh", ["always", "0s", "0seconds", "0 min", "0us", "0"])
+async def test_any_zero_refresh_period_or_always_refreshes_on_every_build(refresh: str) -> None:
+    discovery = await _discover(
+        f"external_components:\n  - source: github://someone/fresh\n    refresh: {refresh}\n"
+    )
+
+    assert discovery.stale_refresh == ()
