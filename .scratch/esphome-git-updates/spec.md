@@ -48,7 +48,12 @@ A HACS custom integration (`esphome_git_updates`, "ESPHome Git Updates") that re
 
 ## Entity
 
-- **`in_progress`:** true while jobs run. `update_percentage` is set only if job frames carry progress (verify in the spike).
+- **`in_progress` / `update_percentage`:** `in_progress` is true while jobs run. `update_percentage` is one 0–100 bar over the whole Install. It is read by polling `firmware/get_job` for the active job about every 2 s, on the connection that follows the job. `follow_job` frames carry no progress, and `follow_jobs` is not used: it streams every job's output and drops frames when its queue is full.
+  - **Fixed bands:** with Clean Build, clean is 0–5, compile 5–90 and upload 90–100. Without it, compile is 0–90 and upload 90–100. Each job's own 0–100 is scaled into its band.
+  - **Never goes backwards:** while a job reports `null`, the bar holds its last value. When a job ends, the bar moves to the end of its band. Clean never reports progress, and a remote compile tops out around 99.
+  - **Remote compiles report progress too:** the add-on parses the forwarded output lines with the same parser it uses for local jobs.
+  - **Cosmetic only:** a failed or unexpected poll stops the bar from updating (logged at debug level) but never fails the Install.
+  - **Re-attach:** a re-attached Install (step 5) shows the bar as well.
 - **`release_summary`:** one line per changed Source, e.g. "ESPHome 2026.10.1 → 2026.10.2; marsrelay abc1234 → def5678 (3 commits)".
 - **`RELEASE_NOTES`:**
   - GitHub sources: the compare-API commit list from installed to latest.
