@@ -1,4 +1,4 @@
-"""Read the Available ESPHome Version from the Device Builder, and keep the Installed one."""
+"""Read the Available ESPHome Version from the Device Builder; keep the Installed one and the running Install."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .connection import CONNECTION_ERRORS, connect_to_device_builder
 from .const import DOMAIN, VERSION_POLL_INTERVAL
-from .device_builder import UnexpectedFrame, UnsupportedServerVersion
+from .device_builder import ActiveJob, UnexpectedFrame, UnsupportedServerVersion
 
 if TYPE_CHECKING:
     from .git_coordinator import GitSourcesCoordinator
@@ -79,10 +79,32 @@ class ProtocolIssue:
         )
 
 
+class _StoredJob(TypedDict):
+    job_id: str
+    stage: str
+
+
+class _StoredInstall(TypedDict):
+    # The jobs still to follow, in order.
+    jobs: list[_StoredJob]
+    # The commits to record if the Install succeeds.
+    commits: dict[str, str]
+
+
 class _StoredData(TypedDict, total=False):
     installed_esphome_version: str
     # Git Source key -> Installed Commit.
     installed_commits: dict[str, str]
+    # The Install running on the Device Builder, if any (ADR-0002).
+    active_install: _StoredInstall
+
+
+@dataclass(frozen=True)
+class ActiveInstall:
+    """An Install whose jobs run on the Device Builder, enough to re-attach to it."""
+
+    jobs: tuple[ActiveJob, ...]
+    commits: Mapping[str, str]
 
 
 class TrackedConfigStore:
@@ -127,11 +149,36 @@ class TrackedConfigStore:
             self._data["installed_commits"] = commits
             await self._store.async_save(self._data)
 
+    @property
+    def active_install(self) -> ActiveInstall | None:
+        """The Install left running when Home Assistant last stopped, if any."""
+        stored = self._data.get("active_install")
+        if stored is None:
+            return None
+        return ActiveInstall(
+            tuple(ActiveJob(job["job_id"], job["stage"]) for job in stored["jobs"]),
+            stored["commits"],
+        )
+
+    async def async_set_active_install(self, active: ActiveInstall) -> None:
+        """Remember the jobs an Install still has to follow, until it ends."""
+        self._data["active_install"] = {
+            "jobs": [{"job_id": job.job_id, "stage": job.stage} for job in active.jobs],
+            "commits": dict(active.commits),
+        }
+        await self._store.async_save(self._data)
+
+    async def async_clear_active_install(self) -> None:
+        """Forget the active Install: it ended without success."""
+        if self._data.pop("active_install", None) is not None:
+            await self._store.async_save(self._data)
+
     async def async_record_install(self, esphome_version: str, commits: Mapping[str, str]) -> None:
         """Record a successful Install: the version compiled with, and the commits seen
-        when Install was pressed (ADR-0003)."""
+        when Install was pressed (ADR-0003). The Install is no longer active."""
         self._data["installed_esphome_version"] = esphome_version
         self._data["installed_commits"] = {**self._data.get("installed_commits", {}), **commits}
+        self._data.pop("active_install", None)
         await self._store.async_save(self._data)
 
 

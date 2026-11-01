@@ -26,6 +26,7 @@ from fake_device_builder import (
     FakeDeviceBuilder,
     Transcript,
     install_transcript,
+    job_events,
     port_of,
     serve,
     server_info,
@@ -324,6 +325,7 @@ async def test_a_successful_install_records_the_version_and_the_update_disappear
     assert state.attributes["installed_version"] == "2026.10.1"
     assert state.attributes["in_progress"] is False
     assert _recorded_version(hass_storage, entry) == "2026.10.1"
+    assert _active_jobs(hass_storage, entry) is None
     assert _notifications(hass) == []
 
 
@@ -481,3 +483,258 @@ async def test_a_connection_lost_mid_compile_notifies_with_the_stage_reached_and
     assert "**compile**" in notification["message"]
     assert "websocket closed" in notification["message"]
     assert "[26/30] CXX obj/src/main.cpp.o" in notification["message"]
+
+
+async def test_an_install_the_device_builder_defers_for_an_offline_device_fails_as_device_offline(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    # Captured: the deferred compile is cancelled and the queued update cleared.
+    fake.transcript = install_transcript("install_deferred_at_enqueue")
+
+    with pytest.raises(HomeAssistantError, match="device offline"):
+        await _install(hass)
+
+    assert fake.mismatches == []
+    assert fake.finished
+    assert hass.states.get(ENTITY_ID).state == STATE_ON  # type: ignore[union-attr]
+    assert _recorded_version(hass_storage, entry) == "2026.10.0"
+    assert _active_jobs(hass_storage, entry) is None
+    [notification] = _notifications(hass)
+    assert "device offline" in str(notification["title"]).lower()
+    assert "queued update was cleared" in notification["message"]
+
+
+async def test_an_upload_that_cannot_reach_the_device_fails_as_device_unreachable(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    """With its web UI closed the Device Builder does not know the device is
+    offline: the compile succeeds and the upload cannot connect."""
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    fake.transcript = install_transcript("install_upload_failed")
+
+    with pytest.raises(HomeAssistantError, match="device offline / unreachable"):
+        await _install(hass)
+
+    assert fake.mismatches == []
+    assert _recorded_version(hass_storage, entry) == "2026.10.0"
+    assert _active_jobs(hass_storage, entry) is None
+    [notification] = _notifications(hass)
+    assert "**upload**: device offline / unreachable" in notification["message"]
+    assert "Connection refused" in notification["message"]
+
+
+async def test_an_upload_that_fails_for_another_reason_is_not_called_unreachable(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    await _set_up_with_an_update(hass, url, hass_storage)
+    transcript = install_transcript("install_upload_failed")
+    fake.transcript = [
+        step
+        for step in transcript
+        if "Connection refused" not in str(step["frame"].get("data", ""))
+    ]
+    fake.transcript = _with_output_line(fake.transcript, 1, "ERROR Error auth result: Invalid password\n")
+
+    with pytest.raises(HomeAssistantError) as raised:
+        await _install(hass)
+
+    assert "unreachable" not in str(raised.value)
+    [notification] = _notifications(hass)
+    assert "unreachable" not in notification["message"]
+    assert "Invalid password" in notification["message"]
+
+
+
+def _queue_install(compile_id: str, upload_id: str) -> Transcript:
+    """The Device Builder's side of an Install, up to following its jobs."""
+    return [
+        server_info(esphome_version="2026.10.1"),
+        {"dir": "out", "frame": {"command": "firmware/install", "message_id": "1",
+                                 "args": {"configuration": "host-node.yaml", "port": "OTA"}}},
+        {"dir": "in", "frame": {"message_id": "1", "result": {
+            "job_id": compile_id, "job_type": "compile", "is_deferred_install": False}}},
+        {"dir": "out", "frame": {"command": "firmware/get_jobs", "message_id": "2",
+                                 "args": {"configuration": "host-node.yaml"}}},
+        {"dir": "in", "frame": {"message_id": "2", "result": [
+            {"job_id": upload_id, "job_type": "upload", "depends_on": compile_id}]}},
+    ]
+
+
+def _active_jobs(hass_storage: dict[str, Any], entry: MockConfigEntry) -> list[dict[str, str]] | None:
+    """The jobs of the running Install in the entry's store, as saved to disk."""
+    active = hass_storage[f"{DOMAIN}.{entry.entry_id}"]["data"].get("active_install")
+    return None if active is None else list(active["jobs"])
+
+
+def _in_progress_changes(hass: HomeAssistant) -> tuple[list[bool], Any]:
+    seen: list[bool] = []
+    stop = hass.bus.async_listen(
+        "state_changed",
+        lambda event: seen.append(event.data["new_state"].attributes.get("in_progress")),
+        callback(lambda event_data: event_data["entity_id"] == ENTITY_ID),
+    )
+    return seen, stop
+
+
+async def test_an_install_interrupted_by_a_restart_is_re_attached_and_recorded(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    fake.transcript = _queue_install("c1", "u1")
+    fake.jobs = {"c1": job_events("INFO Compiling", status=None)}
+
+    await hass.services.async_call("update", "install", {"entity_id": ENTITY_ID})
+    await fake.running.wait()
+
+    jobs = [{"job_id": "c1", "stage": "compile"}, {"job_id": "u1", "stage": "upload"}]
+    assert _active_jobs(hass_storage, entry) == jobs
+
+    # Home Assistant stops while the compile runs on.
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert _active_jobs(hass_storage, entry) == jobs
+
+    # It comes back; the Device Builder kept the jobs and one is still running.
+    fake.transcript = [server_info(esphome_version="2026.10.1")]
+    fake.running.clear()
+    fake.jobs = {"c1": job_events("INFO Compiling", status=None)}
+    seen, stop = _in_progress_changes(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await fake.running.wait()
+    assert hass.states.get(ENTITY_ID).attributes["in_progress"] is True  # type: ignore[union-attr]
+
+    # Restart again; this time both jobs have finished by the time it is back.
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    fake.followed.clear()
+    fake.jobs = {"c1": job_events("INFO Compiling"), "u1": job_events("INFO OTA successful")}
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    stop()
+
+    assert fake.mismatches == []
+    assert fake.followed == ["c1", "u1"]
+    state = hass.states.get(ENTITY_ID)
+    assert state is not None
+    assert state.state == STATE_OFF
+    assert state.attributes["in_progress"] is False
+    assert seen[-1] is False and True in seen
+    assert _recorded_version(hass_storage, entry) == "2026.10.1"
+    assert _active_jobs(hass_storage, entry) is None
+    assert _notifications(hass) == []
+
+
+async def _set_up_after_a_restart(
+    hass: HomeAssistant, url: str, hass_storage: dict[str, Any], *, wait: bool = True
+) -> MockConfigEntry:
+    """An entry whose store holds an Install that was running when HA stopped.
+
+    With *wait*, returns once the re-attached Install has ended."""
+    entry_id = "tracked"
+    hass_storage[f"{DOMAIN}.{entry_id}"] = {
+        "version": 1,
+        "key": f"{DOMAIN}.{entry_id}",
+        "data": {
+            "installed_esphome_version": "2026.10.0",
+            "active_install": {
+                "jobs": [{"job_id": "c1", "stage": "compile"}, {"job_id": "u1", "stage": "upload"}],
+                "commits": {},
+            },
+        },
+    }
+    entry = await _set_up(hass, url, entry_id=entry_id)
+    if wait:
+        await hass.async_block_till_done(wait_background_tasks=True)
+    return entry
+
+
+async def test_a_re_attached_install_whose_jobs_are_gone_tells_the_user_the_outcome_is_unknown(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_after_a_restart(hass, url, hass_storage)
+
+    assert fake.followed == ["c1"]
+    state = hass.states.get(ENTITY_ID)
+    assert state is not None
+    assert state.state == STATE_ON
+    assert state.attributes["in_progress"] is False
+    assert _recorded_version(hass_storage, entry) == "2026.10.0"
+    assert _active_jobs(hass_storage, entry) is None
+    [notification] = _notifications(hass)
+    assert "unknown" in str(notification["title"]).lower()
+    assert "restarted" in notification["message"]
+
+
+async def test_a_re_attached_install_that_fails_notifies_like_any_failed_install(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    fake.jobs = {
+        "c1": job_events("INFO Successfully compiled program."),
+        "u1": job_events(
+            "ERROR Connecting to 192.168.1.50 port 3232 failed: [Errno 113] No route to host",
+            status="failed",
+        ),
+    }
+    entry = await _set_up_after_a_restart(hass, url, hass_storage)
+
+    assert fake.followed == ["c1", "u1"]
+    assert hass.states.get(ENTITY_ID).attributes["in_progress"] is False  # type: ignore[union-attr]
+    assert _recorded_version(hass_storage, entry) == "2026.10.0"
+    assert _active_jobs(hass_storage, entry) is None
+    [notification] = _notifications(hass)
+    assert "**upload**: device offline / unreachable" in notification["message"]
+    assert "No route to host" in notification["message"]
+
+
+async def test_an_install_cannot_start_while_a_re_attached_one_runs(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    fake.jobs = {"c1": job_events("INFO Compiling", status=None)}
+    entry = await _set_up_after_a_restart(hass, url, hass_storage, wait=False)
+    await fake.running.wait()
+
+    with pytest.raises(HomeAssistantError, match="already in progress"):
+        await _install(hass)
+    # Stop following, so the fake Device Builder can shut down.
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_fresh_install_whose_job_vanishes_fails_without_claiming_a_restart(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    fake.transcript = _queue_install("c1", "u1")
+    # fake.jobs is empty: the Device Builder no longer knows c1.
+
+    with pytest.raises(HomeAssistantError, match="failed at compile"):
+        await _install(hass)
+
+    assert _active_jobs(hass_storage, entry) is None
+    [notification] = _notifications(hass)
+    assert "Install failed" in str(notification["title"])
+    assert "restarted" not in notification["message"]

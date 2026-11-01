@@ -406,3 +406,124 @@ async def test_addon_install_on_an_offline_device_is_refused_as_deferred() -> No
     assert result.outcome is device_builder.InstallOutcome.DEFERRED
     [job] = result.jobs
     assert (job.stage, job.status, job.queued_update_armed) == ("compile", "cancelled", False)
+
+
+# --- Re-attaching to an Install after a restart -------------------------------
+
+
+def _follow(message_id: str, job_id: str, status: str, *, armed: bool = False) -> list[dict[str, object]]:
+    """Frames of one `firmware/follow_job` that ends with *status*."""
+    return [
+        {"dir": "out", "frame": {"command": "firmware/follow_job", "message_id": message_id,
+                                 "args": {"job_id": job_id}}},
+        {"dir": "in", "frame": {"message_id": message_id, "event": "result", "data": {
+            "status": status, "exit_code": 0 if status == "completed" else 1, "error": None,
+            "queued_update_armed": armed}}},
+        {"dir": "in", "frame": {"message_id": message_id, "result": None}},
+    ]
+
+
+async def test_following_a_job_the_device_builder_no_longer_knows_raises_job_not_found() -> None:
+    # What the Device Builder answers for an unknown or pruned job id.
+    transcript = [
+        server_info(),
+        {"dir": "out", "frame": {"command": "firmware/follow_job", "message_id": "1",
+                                 "args": {"job_id": "gone"}}},
+        {"dir": "in", "frame": {"message_id": "1", "error_code": "internal_error",
+                                "details": "Command failed: firmware/follow_job"}},
+    ]
+    async with serve(transcript) as (url, fake):
+        async with aiohttp.ClientSession() as session:
+            async with device_builder.connect(session, url) as client:
+                with pytest.raises(device_builder.JobNotFound) as raised:
+                    await client.follow_job("gone", "compile")
+    assert fake.mismatches == []
+    assert raised.value.job_id == "gone"
+
+
+async def test_install_reports_the_jobs_still_to_follow_before_following_each() -> None:
+    reported: list[tuple[device_builder.ActiveJob, ...]] = []
+
+    async def on_jobs(jobs: tuple[device_builder.ActiveJob, ...]) -> None:
+        reported.append(jobs)
+
+    await _install(
+        "install_clean_success", configuration="host-node.yaml", port="127.0.0.1",
+        clean_build=True, on_jobs=on_jobs,
+    )
+    ActiveJob = device_builder.ActiveJob
+    assert reported == [
+        (ActiveJob("98d512a9c2fd", "clean"),),
+        (ActiveJob("368f07c5f6ff", "compile"), ActiveJob("58fd489cd24d", "upload")),
+        (ActiveJob("58fd489cd24d", "upload"),),
+    ]
+
+
+async def _resume(
+    transcript: list[dict[str, object]], jobs: tuple[device_builder.ActiveJob, ...]
+) -> tuple[device_builder.InstallResult, list[tuple[device_builder.ActiveJob, ...]]]:
+    reported: list[tuple[device_builder.ActiveJob, ...]] = []
+
+    async def on_jobs(active: tuple[device_builder.ActiveJob, ...]) -> None:
+        reported.append(active)
+
+    async with serve([server_info(), *transcript]) as (url, fake):
+        async with aiohttp.ClientSession() as session:
+            async with device_builder.connect(session, url) as client:
+                result = await client.resume_install("b2500.yaml", jobs, on_jobs=on_jobs)
+    assert fake.finished and fake.mismatches == []
+    return result, reported
+
+
+async def test_resuming_an_install_follows_its_jobs_to_the_end() -> None:
+    ActiveJob = device_builder.ActiveJob
+    result, reported = await _resume(
+        [*_follow("1", "c1", "completed"), *_follow("2", "u1", "completed")],
+        (ActiveJob("c1", "compile"), ActiveJob("u1", "upload")),
+    )
+    assert result.outcome is device_builder.InstallOutcome.COMPLETED
+    assert [(job.job_id, job.stage) for job in result.jobs] == [("c1", "compile"), ("u1", "upload")]
+    assert reported == [
+        (ActiveJob("c1", "compile"), ActiveJob("u1", "upload")), (ActiveJob("u1", "upload"),),
+    ]
+
+
+async def test_resuming_an_install_that_had_only_got_to_its_clean_build_goes_on_to_compile() -> None:
+    ActiveJob = device_builder.ActiveJob
+    result, reported = await _resume(
+        [
+            *_follow("1", "k1", "completed"),
+            {"dir": "out", "frame": {"command": "firmware/install", "message_id": "2",
+                                     "args": {"configuration": "b2500.yaml", "port": "OTA"}}},
+            {"dir": "in", "frame": {"message_id": "2", "result": {
+                "job_id": "c1", "job_type": "compile", "is_deferred_install": False}}},
+            {"dir": "out", "frame": {"command": "firmware/get_jobs", "message_id": "3",
+                                     "args": {"configuration": "b2500.yaml"}}},
+            {"dir": "in", "frame": {"message_id": "3", "result": [
+                {"job_id": "u1", "job_type": "upload", "depends_on": "c1"}]}},
+            *_follow("4", "c1", "completed"),
+            *_follow("5", "u1", "completed"),
+        ],
+        (ActiveJob("k1", "clean"),),
+    )
+    assert result.outcome is device_builder.InstallOutcome.COMPLETED
+    assert [job.stage for job in result.jobs] == ["clean", "compile", "upload"]
+    assert reported == [
+        (ActiveJob("k1", "clean"),),
+        (ActiveJob("c1", "compile"), ActiveJob("u1", "upload")),
+        (ActiveJob("u1", "upload"),),
+    ]
+
+
+async def test_a_resumed_compile_that_armed_a_queued_update_is_refused_as_deferred() -> None:
+    ActiveJob = device_builder.ActiveJob
+    result, _ = await _resume(
+        [
+            *_follow("1", "c1", "completed", armed=True),
+            {"dir": "out", "frame": {"command": "firmware/clear_queued_update", "message_id": "2",
+                                     "args": {"configuration": "b2500.yaml"}}},
+            {"dir": "in", "frame": {"message_id": "2", "result": None}},
+        ],
+        (ActiveJob("c1", "compile"), ActiveJob("u1", "upload")),
+    )
+    assert result.outcome is device_builder.InstallOutcome.DEFERRED

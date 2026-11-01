@@ -25,6 +25,34 @@ _ROUTINE_WARNINGS = (
 )
 
 
+# A Deferred Install, refused (spec step 4).
+DEVICE_OFFLINE_TEXT = (
+    "The device is offline. The Device Builder would have kept the firmware and "
+    "flashed it once the device came back, which ESPHome Git Updates never lets it "
+    "do: the queued update was cleared and nothing was installed. "
+    "Install again once the device is online."
+)
+
+
+# A re-attached Install whose jobs the Device Builder no longer knows.
+OUTCOME_UNKNOWN_TEXT = (
+    "Home Assistant restarted while an Install was running, and the Device Builder "
+    "no longer knows its jobs, so whether it succeeded is unknown. Nothing was "
+    "recorded: if an update is still offered, install it again."
+)
+
+# What an over-the-air upload prints when it cannot reach the device. The
+# Device Builder only knows a device is offline while its web UI is open, so
+# otherwise an offline device compiles and then fails like this (spec step 4).
+_UNREACHABLE = re.compile(
+    r"connecting to .* failed|error resolving ip address|connection refused"
+    r"|no route to host|host is unreachable|network is unreachable|timed out",
+    re.IGNORECASE,
+)
+
+DEVICE_UNREACHABLE = "device offline / unreachable"
+
+
 def _strip_ansi(line: str) -> str:
     return _ANSI.sub("", line).rstrip()
 
@@ -39,6 +67,8 @@ class InstallLog:
         self.tail: deque[str] = deque(maxlen=LOG_TAIL_LINES)
         # The distinct warnings, in the order they first appeared.
         self.warnings: dict[str, None] = {}
+        # Whether the upload said it could not reach the device.
+        self.device_unreachable = False
 
     def __call__(self, stage: str, line: str) -> None:
         self.stage = stage
@@ -46,6 +76,8 @@ class InstallLog:
         self.tail.append(line)
         if line.startswith(_WARNING_PREFIX) and not line.startswith(_ROUTINE_WARNINGS):
             self.warnings[line] = None
+        if stage == "upload" and _UNREACHABLE.search(line):
+            self.device_unreachable = True
 
     def failure_text(self, stage: str, error: str) -> str:
         tail = "\n".join(self.tail)

@@ -17,10 +17,20 @@ Once a connection's transcript is done, the server answers
 `devices/get_config` from `files` (path -> raw YAML), the way the Device
 Builder reads its config directory; a path not in `files` gets `not_found`.
 Every path asked for is recorded in `reads`.
+
+It also answers `firmware/follow_job` from `jobs` (job id -> the frames' event
+data, `{"event": "output" | "result", "data": ...}`), the way the Device
+Builder keeps jobs across connections; an unknown id gets the
+`internal_error` the Device Builder answers for a pruned job. A job with no
+`result` event is still running: its output is sent, then the follow is
+held open and `running` is set. Every job id followed is recorded in
+`followed`. `firmware/clear_queued_update` is answered with `null` and its
+configuration recorded in `cleared`.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -89,6 +99,10 @@ class FakeDeviceBuilder:
         self.url = ""
         self.mismatches: list[str] = []
         self.finished = False
+        self.jobs: dict[str, list[dict[str, Any]]] = {}
+        self.followed: list[str] = []
+        self.cleared: list[str] = []
+        self.running = asyncio.Event()
 
     async def handle(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
@@ -125,6 +139,14 @@ class FakeDeviceBuilder:
         return ws
 
     async def _answer(self, ws: web.WebSocketResponse, sent: dict[str, Any]) -> None:
+        message_id = sent["message_id"]
+        if sent.get("command") == "firmware/follow_job":
+            await self._follow(ws, message_id, sent["args"]["job_id"])
+            return
+        if sent.get("command") == "firmware/clear_queued_update":
+            self.cleared.append(sent["args"]["configuration"])
+            await ws.send_json({"message_id": message_id, "result": None})
+            return
         if sent.get("command") != "devices/get_config":
             self.mismatches.append(f"unexpected after the transcript: {sent}")
             await ws.close()
@@ -141,6 +163,45 @@ class FakeDeviceBuilder:
                     "details": f"Device '{path}' not found",
                 }
             )
+
+
+    async def _follow(self, ws: web.WebSocketResponse, message_id: str, job_id: str) -> None:
+        self.followed.append(job_id)
+        if job_id not in self.jobs:
+            await ws.send_json(
+                {
+                    "message_id": message_id,
+                    "error_code": "internal_error",
+                    "details": "Command failed: firmware/follow_job",
+                }
+            )
+            return
+        events = self.jobs[job_id]
+        for event in events:
+            await ws.send_json({"message_id": message_id, **event})
+        if any(event["event"] == "result" for event in events):
+            await ws.send_json({"message_id": message_id, "result": None})
+        else:
+            self.running.set()
+
+
+def job_events(*lines: str, status: str | None = "completed") -> list[dict[str, Any]]:
+    """A job for `FakeDeviceBuilder.jobs`: its output *lines*, then its end
+    with *status*, or no end if *status* is None (the job is still running)."""
+    events: list[dict[str, Any]] = [{"event": "output", "data": line} for line in lines]
+    if status is not None:
+        events.append(
+            {
+                "event": "result",
+                "data": {
+                    "status": status,
+                    "exit_code": 0 if status == "completed" else 1,
+                    "error": None,
+                    "queued_update_armed": False,
+                },
+            }
+        )
+    return events
 
 
 def install_transcript(fixture: str, configuration: str = "host-node.yaml") -> Transcript:
