@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import asyncio
+import logging
+from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
 from typing import Any
 from unittest.mock import MagicMock
@@ -20,6 +22,7 @@ from homeassistant.helpers import (
     issue_registry as ir,
 )
 
+from custom_components.esphome_git_updates import device_builder
 from custom_components.esphome_git_updates.const import DOMAIN
 from custom_components.esphome_git_updates.coordinator import protocol_issue_id
 from fake_device_builder import (
@@ -308,7 +311,7 @@ async def test_a_successful_install_records_the_version_and_the_update_disappear
     in_progress: list[bool] = []
     stop_listening = hass.bus.async_listen(
         "state_changed",
-        lambda event: in_progress.append(event.data["new_state"].attributes["in_progress"]),
+        lambda event: _changed(in_progress, event.data["new_state"].attributes["in_progress"]),
         callback(lambda event_data: event_data["entity_id"] == ENTITY_ID),
     )
 
@@ -575,11 +578,18 @@ def _active_jobs(hass_storage: dict[str, Any], entry: MockConfigEntry) -> list[d
     return None if active is None else list(active["jobs"])
 
 
-def _in_progress_changes(hass: HomeAssistant) -> tuple[list[bool], Any]:
-    seen: list[bool] = []
+def _changed(seen: list[Any], value: Any) -> None:
+    """Append *value* when it differs from the last one, ignoring repeated writes."""
+    if not seen or seen[-1] != value:
+        seen.append(value)
+
+
+def _attribute_changes(hass: HomeAssistant, attribute: str) -> tuple[list[Any], Any]:
+    """Record each distinct value *attribute* takes on the entity."""
+    seen: list[Any] = []
     stop = hass.bus.async_listen(
         "state_changed",
-        lambda event: seen.append(event.data["new_state"].attributes.get("in_progress")),
+        lambda event: _changed(seen, event.data["new_state"].attributes.get(attribute)),
         callback(lambda event_data: event_data["entity_id"] == ENTITY_ID),
     )
     return seen, stop
@@ -610,7 +620,7 @@ async def test_an_install_interrupted_by_a_restart_is_re_attached_and_recorded(
     fake.transcript = [server_info(esphome_version="2026.10.1")]
     fake.running.clear()
     fake.jobs = {"c1": job_events("INFO Compiling", status=None)}
-    seen, stop = _in_progress_changes(hass)
+    seen, stop = _attribute_changes(hass, "in_progress")
     assert await hass.config_entries.async_setup(entry.entry_id)
     await fake.running.wait()
     assert hass.states.get(ENTITY_ID).attributes["in_progress"] is True  # type: ignore[union-attr]
@@ -637,7 +647,12 @@ async def test_an_install_interrupted_by_a_restart_is_re_attached_and_recorded(
 
 
 async def _set_up_after_a_restart(
-    hass: HomeAssistant, url: str, hass_storage: dict[str, Any], *, wait: bool = True
+    hass: HomeAssistant,
+    url: str,
+    hass_storage: dict[str, Any],
+    *,
+    wait: bool = True,
+    clean_build: bool = False,
 ) -> MockConfigEntry:
     """An entry whose store holds an Install that was running when HA stopped.
 
@@ -651,6 +666,7 @@ async def _set_up_after_a_restart(
             "active_install": {
                 "jobs": [{"job_id": "c1", "stage": "compile"}, {"job_id": "u1", "stage": "upload"}],
                 "commits": {},
+                "clean_build": clean_build,
             },
         },
     }
@@ -828,3 +844,206 @@ async def test_an_install_re_attached_during_its_clean_build_uploads_where_it_wa
 
     assert fake.mismatches == []
     assert _recorded_version(hass_storage, entry) == "2026.10.1"
+
+
+async def test_install_progress_moves_through_the_compile_and_upload_bands(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    await _set_up_with_an_update(hass, url, hass_storage)
+    fake.transcript = _queue_install("c1", "u1")
+    # The remote compile's ninja output tops out at 99; the upload reaches 100.
+    fake.jobs = {
+        "c1": job_events("[1057/1061] Linking firmware.elf", status="completed"),
+        "u1": job_events("Uploading: [==========] 100% Done...", status="completed"),
+    }
+    seen, stop = _attribute_changes(hass, "update_percentage")
+
+    await _install(hass)
+    stop()
+
+    assert fake.mismatches == []
+    # compile 0-90: 99% of the band is 89, then its end fills it to 90;
+    # upload 90-100 reaches 100. Once the Install ends the bar is None.
+    assert seen == [0, 89, 90, 100, None]
+    assert hass.states.get(ENTITY_ID).attributes["update_percentage"] is None  # type: ignore[union-attr]
+
+
+async def test_a_failed_compile_holds_the_bar_below_its_band_end(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    """Only a completed job fills its band; a failed one leaves the bar alone."""
+    url, fake = builder
+    await _set_up_with_an_update(hass, url, hass_storage)
+    fake.transcript = _queue_install("c1", "u1")
+    fake.jobs = {"c1": job_events("[99/100] Compiling", status="failed")}
+    seen, stop = _attribute_changes(hass, "update_percentage")
+
+    with pytest.raises(HomeAssistantError):
+        await _install(hass)
+    stop()
+
+    assert fake.mismatches == []
+    # compile 0-90: 99% of the band is 89 and stays there; the upload never
+    # runs, and once the Install ends the bar is None.
+    assert seen == [0, 89, None]
+    assert hass.states.get(ENTITY_ID).attributes["update_percentage"] is None  # type: ignore[union-attr]
+
+
+async def test_a_clean_build_progresses_through_the_clean_band_before_compiling(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    await _set_up_with_an_update(hass, url, hass_storage, clean_build=True)
+    # The clean job reports no progress of its own; its band fills when it ends.
+    fake.transcript = install_transcript("install_clean_success", clean={})
+    seen, stop = _attribute_changes(hass, "update_percentage")
+
+    await _install(hass)
+    stop()
+
+    assert fake.mismatches == []
+    # clean 0-5 ends at 5; compile 5-90 reaches 90; upload 90-100 reaches 100.
+    assert seen == [0, 5, 90, 100, None]
+
+
+async def test_a_failed_progress_poll_mid_compile_does_not_fail_the_install(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    caplog.set_level(
+        logging.DEBUG, logger="custom_components.esphome_git_updates.device_builder"
+    )
+    monkeypatch.setattr(device_builder, "PROGRESS_POLL_INTERVAL", 0.01)
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    fake.transcript = _queue_install("c1", "u1")
+    compile_done = asyncio.Event()
+    fake.waits = {"c1": compile_done}
+    fake.jobs = {
+        "c1": job_events("[10/100] Compiling", status=None),
+        "u1": job_events("Uploading: [==========] 100% Done...", status="completed"),
+    }
+
+    installing = asyncio.create_task(_install(hass))
+    await asyncio.wait_for(fake.waiting.wait(), 1)
+    # The bar has moved on the compile's progress before the poll fails.
+    await _wait_for_percentage(hass, 9)
+    fake.progress_errors = {"c1": 1}
+    await _wait_until(
+        lambda: "progress poll for job c1 failed" in caplog.text,
+        "no failed poll was logged",
+    )
+
+    fake.jobs["c1"] = job_events(
+        "[10/100] Compiling", "[100/100] Linking firmware.elf", status="completed"
+    )
+    compile_done.set()
+    await installing
+
+    assert fake.mismatches == []
+    assert _recorded_version(hass_storage, entry) == "2026.10.1"
+    assert hass.states.get(ENTITY_ID).attributes["update_percentage"] is None  # type: ignore[union-attr]
+    assert _notifications(hass) == []
+
+
+async def test_a_malformed_progress_poll_is_logged_and_the_install_succeeds(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(
+        logging.DEBUG, logger="custom_components.esphome_git_updates.device_builder"
+    )
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    fake.transcript = _queue_install("c1", "u1")
+    fake.jobs = {
+        "c1": job_events("[1057/1061] Linking firmware.elf", status="completed"),
+        "u1": job_events("Uploading: [==========] 100% Done...", status="completed"),
+    }
+    fake.progress_malformed = {"c1": 1}
+
+    await _install(hass)
+
+    assert fake.mismatches == []
+    assert _recorded_version(hass_storage, entry) == "2026.10.1"
+    assert "malformed job progress" in caplog.text
+    assert hass.states.get(ENTITY_ID).attributes["update_percentage"] is None  # type: ignore[union-attr]
+    assert _notifications(hass) == []
+
+
+async def _wait_until(
+    predicate: Callable[[], bool], message: str = "condition was never met"
+) -> None:
+    for _ in range(100):
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(message)
+
+
+async def _wait_for_percentage(hass: HomeAssistant, expected: int) -> None:
+    def reached() -> bool:
+        state = hass.states.get(ENTITY_ID)
+        return state is not None and state.attributes.get("update_percentage") == expected
+
+    try:
+        await _wait_until(reached)
+    except AssertionError:
+        state = hass.states.get(ENTITY_ID)
+        actual = None if state is None else state.attributes.get("update_percentage")
+        raise AssertionError(
+            f"update_percentage never became {expected}: {actual}"
+        ) from None
+
+
+async def test_a_re_attached_install_shows_progress_from_its_job_and_completes(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    hass_storage: dict[str, Any],
+) -> None:
+    url, fake = builder
+    # It had a Clean Build on, so the compile's 0-100 maps onto 5-90.
+    compile_done = asyncio.Event()
+    fake.waits = {"c1": compile_done}
+    fake.jobs = {
+        "c1": job_events("[50/100] Compiling", status=None),
+        "u1": job_events("Uploading: [==========] 100% Done...", status="completed"),
+    }
+    entry = await _set_up_after_a_restart(
+        hass, url, hass_storage, wait=False, clean_build=True
+    )
+    await asyncio.wait_for(fake.waiting.wait(), 1)
+
+    await _wait_for_percentage(hass, 47)
+    state = hass.states.get(ENTITY_ID)
+    assert state is not None
+    assert state.attributes["in_progress"] is True
+    assert state.attributes["update_percentage"] == 47
+
+    # The compile finishes; the Install goes on to upload and records its version.
+    fake.jobs["c1"] = job_events(
+        "[50/100] Compiling", "[100/100] Linking firmware.elf", status="completed"
+    )
+    compile_done.set()
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    state = hass.states.get(ENTITY_ID)
+    assert state is not None
+    assert state.state == STATE_OFF
+    assert state.attributes["in_progress"] is False
+    assert state.attributes["update_percentage"] is None
+    assert _recorded_version(hass_storage, entry) == "2026.10.1"
+    assert _active_jobs(hass_storage, entry) is None
+    assert _notifications(hass) == []

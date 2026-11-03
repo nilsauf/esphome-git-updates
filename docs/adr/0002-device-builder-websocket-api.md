@@ -12,4 +12,6 @@ Installs are driven from inside Home Assistant as background tasks talking to th
 
 Device Builder describes `/ws` as unstable ("undocumented breaking changes until stable"). The protocol is kept behind one client module, checked against `server_version` on connect, and unexpected frames raise a Repair issue. The client is proven by a CLI spike against a real add-on before any integration code is written, because the original script was never run.
 
+Progress polling is the one deliberate exception to that rule. A failed or malformed `firmware/get_job` poll (ticket 14) is logged at debug level and raises no Repair issue, because progress is cosmetic: losing it never fails an Install. Every other unexpected frame still raises a Repair issue.
+
 Jobs persist on the Device Builder across disconnects. The integration therefore stores active job ids and re-attaches with `follow_job` after an HA restart, instead of declaring the build "interrupted".

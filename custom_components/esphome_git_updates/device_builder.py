@@ -7,15 +7,18 @@ Home Assistant imports so the CLI spike and the integration share it.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Final
 
 import aiohttp
+
+_LOGGER = logging.getLogger(__name__)
 
 # `/ws` is unstable upstream. The protocol below was read from Device Builder
 # 1.26.0's source and checked against a running 1.26.0. 1.25.0's `/ws` code
@@ -157,6 +160,27 @@ class ActiveJob:
     stage: str
 
 
+@dataclass(frozen=True)
+class JobProgress:
+    """The active job's own progress, for scaling onto the Install's one bar."""
+
+    # "clean", "compile" or "upload".
+    stage: str
+    # 0-100 as the Device Builder reports it, or None while the job has none.
+    percent: int | None
+    # Whether the job has ended, so the bar belongs at the end of its band.
+    finished: bool = False
+
+
+# Called with the active job's progress, and once when it ends.
+ProgressCallback = Callable[[JobProgress], None]
+
+# How often `firmware/get_job` is polled while a job is followed, and the
+# bound on the one poll before its output is replayed.
+PROGRESS_POLL_INTERVAL: Final = 2.0
+PROGRESS_POLL_TIMEOUT: Final = 5.0
+
+
 # Awaited with the jobs an Install still has to follow, whenever they change.
 JobsCallback = Callable[[tuple[ActiveJob, ...]], Awaitable[None]]
 
@@ -170,10 +194,12 @@ class _InstallRun:
         port: str,
         on_output: OutputCallback | None,
         on_jobs: JobsCallback | None,
+        on_progress: ProgressCallback | None = None,
     ) -> None:
         self.configuration = configuration
         self.port = port
         self.output: OutputCallback = on_output or (lambda stage, line: None)
+        self.progress = on_progress
         self._on_jobs = on_jobs
         self.results: list[JobResult] = []
 
@@ -204,9 +230,10 @@ def is_supported_server_version(server_version: str) -> bool:
 class DeviceBuilderClient:
     """A connected Device Builder. Create it with `connect`.
 
-    Commands run one at a time: the client sends a command, then reads frames
-    until that command's `result` or `error_code` frame. A frame for any
-    other message id is a protocol surprise and raises `UnexpectedFrame`.
+    Commands run over one connection and their frames are routed by
+    `message_id`, so a short command such as `firmware/get_job` can run while
+    a long `firmware/follow_job` stream is open. A frame for an id this client
+    never sent is a protocol surprise and raises `UnexpectedFrame`.
     """
 
     def __init__(
@@ -217,8 +244,18 @@ class DeviceBuilderClient:
     ) -> None:
         self._ws = ws
         self._record = recorder or (lambda direction, frame: None)
-        self._lock = asyncio.Lock()
         self._next_id = 0
+        # Ids of requests that were interrupted before their answer, so a late
+        # frame for one of those is discarded instead of treated as a surprise.
+        # A command gets exactly one answer, so its id is dropped when that late
+        # frame arrives; a `follow_job` stream can keep sending them, so it stays
+        # suppressed for the connection's life.
+        self._abandoned_once: set[str] = set()
+        self._abandoned_stream: set[str] = set()
+        self._routes: dict[str, asyncio.Queue[dict[str, Any] | _Failed]] = {}
+        self._reader: asyncio.Task[None] | None = None
+        self._failure: BaseException | None = None
+        self._send_lock = asyncio.Lock()
         self.server_version: str = info["server_version"]
         # The Available ESPHome Version: what the Device Builder compiles with.
         self.esphome_version: str = info["esphome_version"]
@@ -246,6 +283,26 @@ class DeviceBuilderClient:
             raise UnexpectedFrame("malformed devices/get_config result", result)
         return result
 
+    async def get_job_progress(self, job_id: str) -> int | None:
+        """The job's own 0-100 progress, or None while it has none.
+
+        The Device Builder keeps this per job, monotonic within the job. It
+        resets it to None when it requeues a job, so callers must not read a
+        `None` as a decrease. An unknown or pruned job answers with no job.
+        """
+        result = await self._command("firmware/get_job", job_id=job_id)
+        if result is None:
+            return None
+        if not isinstance(result, dict) or "progress" not in result:
+            raise UnexpectedFrame("malformed firmware/get_job result", result)
+        progress = result["progress"]
+        if progress is None:
+            return None
+        # bool is an int subclass, and a percentage outside 0-100 is drift.
+        if isinstance(progress, bool) or not isinstance(progress, int) or not 0 <= progress <= 100:
+            raise UnexpectedFrame("malformed job progress", result)
+        return progress
+
     async def install(
         self,
         configuration: str,
@@ -254,6 +311,7 @@ class DeviceBuilderClient:
         clean_build: bool = False,
         on_output: OutputCallback | None = None,
         on_jobs: JobsCallback | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> InstallResult:
         """Run one Install: an optional Clean Build, then compile, then upload.
 
@@ -268,9 +326,10 @@ class DeviceBuilderClient:
 
         *on_jobs* is awaited with the jobs still to follow before each one is
         followed, so the Install can be resumed with `resume_install` after
-        the connection is gone.
+        the connection is gone. *on_progress* gets each job's own progress
+        while it is followed.
         """
-        run = _InstallRun(configuration, port, on_output, on_jobs)
+        run = _InstallRun(configuration, port, on_output, on_jobs, on_progress)
         if clean_build:
             clean = await self._command("firmware/clean", configuration=configuration)
             return await self._follow(run, await self._clean_jobs(configuration, clean))
@@ -313,6 +372,7 @@ class DeviceBuilderClient:
         port: str = OTA,
         on_output: OutputCallback | None = None,
         on_jobs: JobsCallback | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> InstallResult:
         """Finish an Install started on an earlier connection.
 
@@ -321,7 +381,9 @@ class DeviceBuilderClient:
         goes on to compile and upload. Raises `JobNotFound` if the Device
         Builder no longer knows a job.
         """
-        return await self._follow(_InstallRun(configuration, port, on_output, on_jobs), jobs)
+        return await self._follow(
+            _InstallRun(configuration, port, on_output, on_jobs, on_progress), jobs
+        )
 
     async def _compile_and_upload(self, run: _InstallRun) -> InstallResult:
         compile_job = await self._command(
@@ -330,7 +392,9 @@ class DeviceBuilderClient:
         compile_id = _job_id(compile_job)
         if compile_job.get("is_deferred_install"):
             await self._refuse_deferred_compile(run.configuration, compile_id)
-            run.results.append(await self.follow_job(compile_id, "compile", run.output))
+            run.results.append(
+                await self.follow_job(compile_id, "compile", run.output, run.progress)
+            )
             return run.done(InstallOutcome.DEFERRED)
         upload_id = await self._dependent_upload(run.configuration, compile_id)
         return await self._follow(
@@ -343,7 +407,9 @@ class DeviceBuilderClient:
         """Follow *jobs* in order, then go on to compile if they were a Clean Build."""
         for index, job in enumerate(jobs):
             await run.report(jobs[index:])
-            run.results.append(await self.follow_job(job.job_id, job.stage, run.output))
+            run.results.append(
+                await self.follow_job(job.job_id, job.stage, run.output, run.progress)
+            )
             if run.results[-1].queued_update_armed:
                 await self._command(
                     "firmware/clear_queued_update", configuration=run.configuration
@@ -356,18 +422,45 @@ class DeviceBuilderClient:
         return run.done(InstallOutcome.COMPLETED)
 
     async def follow_job(
-        self, job_id: str, stage: str, on_output: OutputCallback | None = None
+        self,
+        job_id: str,
+        stage: str,
+        on_output: OutputCallback | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> JobResult:
         """Follow a firmware job to its end, replaying its output so far.
 
         Jobs live on the Device Builder independently of any connection, so
         this also re-attaches to a job started on an earlier connection.
+
+        *on_progress* gets the job's own progress, polled with
+        `firmware/get_job` on this same connection, and one last update when
+        a job succeeds, to fill its band. A failed job ends without one. A
+        failed poll is logged at debug level and does not affect following
+        the job.
         """
         output = on_output or (lambda stage, line: None)
         result: dict[str, Any] | None = None
-        async with self._lock:
-            message_id = await self._send("firmware/follow_job", {"job_id": job_id})
-            async for frame in self._frames(message_id):
+        message_id = await self._send("firmware/follow_job", {"job_id": job_id})
+        poller: asyncio.Task[None] | None = None
+        done = False
+        try:
+            if on_progress is not None:
+                # One poll before replaying the stream, so a re-attached job
+                # shows its current progress straight away. It is bounded, or
+                # a slow server would hold up the output.
+                try:
+                    await asyncio.wait_for(
+                        self._poll_progress(job_id, stage, on_progress),
+                        PROGRESS_POLL_TIMEOUT,
+                    )
+                except TimeoutError:
+                    _LOGGER.debug("progress poll for job %s timed out", job_id)
+                poller = asyncio.create_task(
+                    self._poll_progress_loop(job_id, stage, on_progress)
+                )
+            while True:
+                frame = await self._next_frame(message_id)
                 event = frame.get("event")
                 if event == "output":
                     output(stage, str(frame.get("data", "")).rstrip("\n"))
@@ -383,10 +476,17 @@ class DeviceBuilderClient:
                         if err.error_code == "internal_error":
                             raise JobNotFound(job_id) from err
                         raise
+                    done = True
                     break
+        finally:
+            self._forget(message_id, abandoned=not done, stream=True)
+            if poller is not None:
+                poller.cancel()
+                with suppress(asyncio.CancelledError):
+                    await poller
         if not isinstance(result, dict) or "status" not in result:
             raise UnexpectedFrame("follow_job ended without a result event", result)
-        return JobResult(
+        job = JobResult(
             job_id=job_id,
             stage=stage,
             status=str(result["status"]),
@@ -394,6 +494,43 @@ class DeviceBuilderClient:
             error=result.get("error"),
             queued_update_armed=bool(result.get("queued_update_armed")),
         )
+        # Only a completed job fills its band: a failed one leaves the bar
+        # where it is, and it resets when the Install ends (ticket 14).
+        if on_progress is not None and job.succeeded:
+            self._notify_progress(on_progress, JobProgress(stage, None, finished=True))
+        return job
+
+    async def _poll_progress_loop(
+        self, job_id: str, stage: str, on_progress: ProgressCallback
+    ) -> None:
+        while True:
+            await asyncio.sleep(PROGRESS_POLL_INTERVAL)
+            await self._poll_progress(job_id, stage, on_progress)
+
+    async def _poll_progress(
+        self, job_id: str, stage: str, on_progress: ProgressCallback
+    ) -> None:
+        """Poll once; a failure only means the bar does not move (ticket 14)."""
+        try:
+            percent = await self.get_job_progress(job_id)
+        except Exception as err:  # noqa: BLE001 - progress is cosmetic
+            _LOGGER.debug("progress poll for job %s failed: %s", job_id, err)
+            return
+        if percent is not None:
+            self._notify_progress(on_progress, JobProgress(stage, percent))
+
+    def _notify_progress(
+        self, on_progress: ProgressCallback, update: JobProgress
+    ) -> None:
+        """Hand *update* to *on_progress*, whatever it does.
+
+        Progress is cosmetic: losing it never fails an Install (ticket 14),
+        so a callback that raises is only logged.
+        """
+        try:
+            on_progress(update)
+        except Exception as err:  # noqa: BLE001 - progress is cosmetic
+            _LOGGER.debug("progress callback failed: %s", err)
 
     async def _refuse_deferred_compile(self, configuration: str, compile_id: str) -> None:
         """Stop a compile queued for an offline device from ever flashing it.
@@ -423,39 +560,101 @@ class DeviceBuilderClient:
 
     async def _command(self, command: str, **args: Any) -> Any:
         """Run a command and return its `result`."""
-        async with self._lock:
-            message_id = await self._send(command, args)
-            async for frame in self._frames(message_id):
-                return self._result(command, frame)
-        raise AssertionError("unreachable")
+        message_id = await self._send(command, args)
+        answered = False
+        try:
+            frame = await self._next_frame(message_id)
+            answered = True
+            return self._result(command, frame)
+        finally:
+            # Only an interrupted command can get a late frame; one that was
+            # answered and then gets another is a protocol surprise.
+            self._forget(message_id, abandoned=not answered)
 
     async def _send(self, command: str, args: dict[str, Any]) -> str:
-        self._next_id += 1
-        message_id = str(self._next_id)
-        frame = {"command": command, "message_id": message_id, "args": args}
-        self._record("out", frame)
-        try:
-            await self._ws.send_json(frame)
-        except (ConnectionError, RuntimeError) as err:
-            raise ConnectionLost(f"websocket closed while sending {command}") from err
+        self._ensure_reader()
+        async with self._send_lock:
+            if self._failure is not None:
+                raise self._failure
+            self._next_id += 1
+            message_id = str(self._next_id)
+            self._routes[message_id] = asyncio.Queue()
+            frame = {"command": command, "message_id": message_id, "args": args}
+            self._record("out", frame)
+            try:
+                await self._ws.send_json(frame)
+            except (ConnectionError, RuntimeError) as err:
+                self._forget(message_id, abandoned=True)
+                raise ConnectionLost(f"websocket closed while sending {command}") from err
         return message_id
 
-    async def _frames(self, message_id: str) -> AsyncIterator[dict[str, Any]]:
-        """Yield every frame received for *message_id*; raise on anything else."""
-        while True:
-            msg = await self._ws.receive()
-            if msg.type in _CLOSED_TYPES:
-                raise ConnectionLost(f"websocket closed ({msg.type.name})")
-            if msg.type != aiohttp.WSMsgType.TEXT:
-                raise UnexpectedFrame(f"{msg.type.name} message", msg.data)
-            try:
-                frame = msg.json()
-            except ValueError as err:
-                raise UnexpectedFrame("invalid JSON", msg.data) from err
-            self._record("in", frame)
-            if not isinstance(frame, dict) or frame.get("message_id") != message_id:
-                raise UnexpectedFrame(f"expected a frame for message {message_id}", frame)
-            yield frame
+    def _ensure_reader(self) -> None:
+        if self._reader is None:
+            self._reader = asyncio.create_task(self._read_frames())
+
+    async def _read_frames(self) -> None:
+        """Route each received frame to the command that asked for it."""
+        try:
+            while True:
+                msg = await self._ws.receive()
+                if msg.type in _CLOSED_TYPES:
+                    raise ConnectionLost(f"websocket closed ({msg.type.name})")
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    raise UnexpectedFrame(f"{msg.type.name} message", msg.data)
+                try:
+                    frame = msg.json()
+                except ValueError as err:
+                    raise UnexpectedFrame("invalid JSON", msg.data) from err
+                self._record("in", frame)
+                if not isinstance(frame, dict):
+                    raise UnexpectedFrame("expected a JSON object", frame)
+                message_id = frame.get("message_id")
+                route = self._routes.get(message_id) if isinstance(message_id, str) else None
+                if route is None:
+                    if isinstance(message_id, str) and message_id in self._abandoned_stream:
+                        # A late frame from a stream that was given up on; it
+                        # may keep arriving for the rest of the connection.
+                        continue
+                    if isinstance(message_id, str) and message_id in self._abandoned_once:
+                        # A late frame for a one-answer command that was given
+                        # up on. It cannot send another, so stop tracking it.
+                        self._abandoned_once.discard(message_id)
+                        continue
+                    raise UnexpectedFrame("expected a frame for one of our messages", frame)
+                route.put_nowait(frame)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as err:  # noqa: BLE001 - handed to every waiter
+            self._failure = err
+            for route in tuple(self._routes.values()):
+                route.put_nowait(_Failed(err))
+
+    async def _next_frame(self, message_id: str) -> dict[str, Any]:
+        item = await self._routes[message_id].get()
+        if isinstance(item, _Failed):
+            raise item.error
+        return item
+
+    def _forget(self, message_id: str, *, abandoned: bool = False, stream: bool = False) -> None:
+        """Stop routing *message_id*; if abandoned, suppress late frames for it.
+
+        *stream* marks a `follow_job` request, which can answer many times, so
+        its id stays suppressed until the connection ends. A command answers
+        once, so its id is dropped after the first late frame.
+        """
+        self._routes.pop(message_id, None)
+        if abandoned:
+            if stream:
+                self._abandoned_stream.add(message_id)
+            else:
+                self._abandoned_once.add(message_id)
+
+    async def _close(self) -> None:
+        if self._reader is not None:
+            self._reader.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._reader
+            self._reader = None
 
     @staticmethod
     def _result(command: str, frame: dict[str, Any]) -> Any:
@@ -464,6 +663,13 @@ class DeviceBuilderClient:
         if "result" not in frame:
             raise UnexpectedFrame(f"expected the result of {command}", frame)
         return frame["result"]
+
+
+class _Failed:
+    """A failure from the reader, handed to every command waiting on it."""
+
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
 
 
 def _job_id(job: object) -> str:
@@ -516,10 +722,13 @@ async def connect(
             recorder("in", handshake)
         info = _check_server_info(handshake)
         client = DeviceBuilderClient(ws, info, recorder)
-        if info.get("requires_auth"):
-            if not username or not password:
-                raise AuthenticationFailed(
-                    "this Device Builder requires a username and password"
-                )
-            await client._login(username, password)
-        yield client
+        try:
+            if info.get("requires_auth"):
+                if not username or not password:
+                    raise AuthenticationFailed(
+                        "this Device Builder requires a username and password"
+                    )
+                await client._login(username, password)
+            yield client
+        finally:
+            await client._close()

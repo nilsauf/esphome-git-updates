@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import aiohttp
 import pytest
 
@@ -9,6 +11,7 @@ import device_builder
 from fake_device_builder import (
     FakeDeviceBuilder,
     Transcript,
+    job_events,
     load_fixture,
     server_info,
     serve,
@@ -129,6 +132,133 @@ async def test_a_frame_for_another_message_raises_unexpected_frame() -> None:
             async with device_builder.connect(session, url) as client:
                 with pytest.raises(device_builder.UnexpectedFrame):
                     await client.list_configurations()
+
+
+async def test_get_job_progress_returns_the_jobs_own_progress() -> None:
+    transcript = [
+        server_info(),
+        {"dir": "out", "frame": {"command": "firmware/get_job", "message_id": "1",
+                                 "args": {"job_id": "c1"}}},
+        {"dir": "in", "frame": {"message_id": "1", "result": {
+            "job_id": "c1", "status": "running", "progress": 42}}},
+    ]
+    async with serve(transcript) as (url, fake):
+        async with aiohttp.ClientSession() as session:
+            async with device_builder.connect(session, url) as client:
+                assert await client.get_job_progress("c1") == 42
+    assert fake.mismatches == []
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"job_id": "c1", "progress": "halfway"},
+        {"job_id": "c1", "progress": 101},
+        {"job_id": "c1"},
+    ],
+)
+async def test_a_malformed_get_job_result_raises_unexpected_frame(
+    result: dict[str, object],
+) -> None:
+    transcript = [
+        server_info(),
+        {"dir": "out", "frame": {"command": "firmware/get_job", "message_id": "1",
+                                 "args": {"job_id": "c1"}}},
+        {"dir": "in", "frame": {"message_id": "1", "result": result}},
+    ]
+    async with serve(transcript) as (url, _):
+        async with aiohttp.ClientSession() as session:
+            async with device_builder.connect(session, url) as client:
+                with pytest.raises(device_builder.UnexpectedFrame):
+                    await client.get_job_progress("c1")
+
+
+async def test_get_job_runs_while_a_follow_job_stream_is_open() -> None:
+    """The frames of an open follow are routed aside while get_job answers."""
+    async with serve([server_info()]) as (url, fake):
+        fake.jobs = {"c1": job_events("[10/100] Compiling", status=None)}
+        fake.progress = {"c1": [42]}
+        async with aiohttp.ClientSession() as session:
+            async with device_builder.connect(session, url) as client:
+                following = asyncio.create_task(client.follow_job("c1", "compile"))
+                await fake.running.wait()
+                assert await client.get_job_progress("c1") == 42
+                following.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await following
+    assert fake.mismatches == []
+
+
+async def test_progress_is_polled_while_a_job_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(device_builder, "PROGRESS_POLL_INTERVAL", 0.01)
+    progress: list[device_builder.JobProgress] = []
+    polled = asyncio.Event()
+
+    def on_progress(update: device_builder.JobProgress) -> None:
+        progress.append(update)
+        if sum(1 for update in progress if not update.finished) >= 3:
+            polled.set()
+
+    async with serve([server_info()]) as (url, fake):
+        fake.jobs = {"c1": job_events("[10/100] Compiling", status=None)}
+        fake.progress = {"c1": [10, 50, 99]}
+        async with aiohttp.ClientSession() as session:
+            async with device_builder.connect(session, url) as client:
+                following = asyncio.create_task(
+                    client.follow_job("c1", "compile", on_progress=on_progress)
+                )
+                await asyncio.wait_for(polled.wait(), 1)
+                following.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await following
+
+    assert [update.percent for update in progress if not update.finished] == [10, 50, 99]
+    assert fake.mismatches == []
+
+
+@pytest.mark.parametrize("raising", ["polled", "finished"])
+async def test_a_progress_callback_that_raises_never_fails_the_follow(raising: str) -> None:
+    """Progress is cosmetic: a callback that raises loses only that update (ticket 14)."""
+    updates: list[device_builder.JobProgress] = []
+
+    def on_progress(update: device_builder.JobProgress) -> None:
+        updates.append(update)
+        if (raising == "finished") == update.finished:
+            raise RuntimeError(f"the entity is gone on the {raising} update")
+
+    async with serve([server_info()]) as (url, fake):
+        fake.jobs = {"c1": job_events("[10/100] Compiling")}
+        fake.progress = {"c1": [42]}
+        async with aiohttp.ClientSession() as session:
+            async with device_builder.connect(session, url) as client:
+                job = await client.follow_job("c1", "compile", on_progress=on_progress)
+
+    assert job.succeeded
+    # Both updates were attempted, whichever one raised.
+    assert [update.percent for update in updates if not update.finished] == [42]
+    assert [update.percent for update in updates if update.finished] == [None]
+    assert fake.mismatches == []
+
+
+async def test_a_failed_job_does_not_fill_its_progress_band() -> None:
+    """Only a completed job moves the bar to the end of its band (ticket 14)."""
+    updates: list[device_builder.JobProgress] = []
+
+    def on_progress(update: device_builder.JobProgress) -> None:
+        updates.append(update)
+
+    async with serve([server_info()]) as (url, fake):
+        fake.jobs = {"c1": job_events("[99/100] Compiling", status="failed")}
+        fake.progress = {"c1": [99]}
+        async with aiohttp.ClientSession() as session:
+            async with device_builder.connect(session, url) as client:
+                job = await client.follow_job("c1", "compile", on_progress=on_progress)
+
+    assert not job.succeeded
+    # The failed job ends without the update that would fill its band.
+    assert not [update for update in updates if update.finished]
+    assert {update.percent for update in updates} == {99}
+    assert fake.mismatches == []
 
 
 async def test_a_malformed_result_raises_unexpected_frame() -> None:

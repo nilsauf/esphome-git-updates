@@ -34,7 +34,9 @@ from .device_builder import (
     InstallOutcome,
     InstallResult,
     JobNotFound,
+    JobProgress,
     JobsCallback,
+    ProgressCallback,
 )
 from .git_coordinator import GitSourcesCoordinator
 from .install_log import (
@@ -45,12 +47,16 @@ from .install_log import (
 )
 from .linked_device import LinkedDevice
 from .options import Options
+from .progress import InstallProgress
 from .versions import SourceCommits, Versions
 
 _LOGGER = logging.getLogger(__name__)
 
 # Starts or resumes an Install's jobs on a connected client.
-_StartJobs = Callable[[DeviceBuilderClient, InstallLog, JobsCallback], Awaitable[InstallResult]]
+_StartJobs = Callable[
+    [DeviceBuilderClient, InstallLog, JobsCallback, ProgressCallback],
+    Awaitable[InstallResult],
+]
 
 
 async def async_setup_entry(
@@ -73,7 +79,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
     _attr_has_entity_name = True
     _attr_device_class = UpdateDeviceClass.FIRMWARE
     # PROGRESS so that in_progress is the entity's own: a re-attached Install
-    # runs outside async_install. There is no update_percentage yet (ticket 14).
+    # runs outside async_install, and both set update_percentage (ticket 14).
     _attr_supported_features = (
         UpdateEntityFeature.INSTALL
         | UpdateEntityFeature.PROGRESS
@@ -190,12 +196,14 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
             commits,
             options.upload_address,
             "clean" if options.clean_build else "compile",
-            lambda client, log, on_jobs: client.install(
+            options.clean_build,
+            lambda client, log, on_jobs, on_progress: client.install(
                 configuration,
                 port=options.upload_address,
                 clean_build=options.clean_build,
                 on_output=log,
                 on_jobs=on_jobs,
+                on_progress=on_progress,
             ),
             reattached=False,
         )
@@ -221,14 +229,22 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
                 f"Install of {self._entry.title} refused: device offline "
                 "(every entity of its Linked Device is unavailable)"
             )
-        self._attr_in_progress = True
-        self.async_write_ha_state()
+        # The bar is 0 until the first progress arrives.
+        self._set_state(True, 0)
         try:
             await self._git.async_check_before_install()
         except BaseException:
-            self._attr_in_progress = False
-            self.async_write_ha_state()
+            self._set_state(False, None)
             raise
+
+    def _set_state(self, in_progress: bool, percentage: int | None) -> None:
+        """Write both Install attributes in one state change."""
+        self._attr_in_progress = in_progress
+        self._attr_update_percentage = percentage
+        self.async_write_ha_state()
+
+    def _set_percentage(self, percentage: int) -> None:
+        self._set_state(True, percentage)
 
     def _reattach(self, active: ActiveInstall) -> None:
         """Finish the Install that was running when Home Assistant stopped (ADR-0002)."""
@@ -237,8 +253,14 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
             active.commits,
             active.port,
             active.jobs[0].stage,
-            lambda client, log, on_jobs: client.resume_install(
-                configuration, active.jobs, port=active.port, on_output=log, on_jobs=on_jobs
+            active.clean_build,
+            lambda client, log, on_jobs, on_progress: client.resume_install(
+                configuration,
+                active.jobs,
+                port=active.port,
+                on_output=log,
+                on_jobs=on_jobs,
+                on_progress=on_progress,
             ),
             reattached=True,
         )
@@ -248,6 +270,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         commits: Mapping[str, str],
         port: str,
         stage: str,
+        clean_build: bool,
         run: _StartJobs,
         *,
         reattached: bool,
@@ -257,11 +280,10 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         Unloading the entry, as stopping Home Assistant does, cancels the task
         but leaves its jobs in the store, to be re-attached on the next setup.
         """
-        self._attr_in_progress = True
-        self.async_write_ha_state()
+        self._set_state(True, 0)
         return self._entry.async_create_background_task(
             self.hass,
-            self._install(commits, port, stage, run, reattached),
+            self._install(commits, port, stage, clean_build, run, reattached),
             f"{DOMAIN} install {self._entry.title}",
         )
 
@@ -270,12 +292,13 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         commits: Mapping[str, str],
         port: str,
         stage: str,
+        clean_build: bool,
         run: _StartJobs,
         reattached: bool,
     ) -> None:
         cancelled = False
         try:
-            await self._follow_install(commits, port, stage, run, reattached)
+            await self._follow_install(commits, port, stage, clean_build, run, reattached)
         except asyncio.CancelledError:
             # It stays in progress, and is re-attached on the next setup.
             cancelled = True
@@ -286,21 +309,28 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
                 raise
         finally:
             if not cancelled:
-                self._attr_in_progress = False
-                self.async_write_ha_state()
+                self._set_state(False, None)
 
     async def _follow_install(
         self,
         commits: Mapping[str, str],
         port: str,
         stage: str,
+        clean_build: bool,
         run: _StartJobs,
         reattached: bool,
     ) -> None:
         log = InstallLog()
+        progress = InstallProgress(clean_build)
+
+        def on_progress(update: JobProgress) -> None:
+            if progress.report(update):
+                self._set_percentage(progress.percentage)
 
         async def on_jobs(jobs: tuple[ActiveJob, ...]) -> None:
-            await self._store.async_set_active_install(ActiveInstall(jobs, commits, port))
+            await self._store.async_set_active_install(
+                ActiveInstall(jobs, commits, port, clean_build)
+            )
 
         try:
             async with connect_to_device_builder(
@@ -308,7 +338,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
             ) as client:
                 # The first job's output names its stage; until then, it is *stage*.
                 log.stage = stage
-                result = await run(client, log, on_jobs)
+                result = await run(client, log, on_jobs, on_progress)
                 esphome_version = client.esphome_version
         except JobNotFound as err:
             await self._store.async_clear_active_install()

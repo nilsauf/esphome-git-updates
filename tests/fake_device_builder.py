@@ -27,12 +27,25 @@ Builder keeps jobs across connections; an unknown id gets the
 held open and `running` is set. Every job id followed is recorded in
 `followed`. `firmware/clear_queued_update` is answered with `null` and its
 configuration recorded in `cleared`.
+
+It answers `firmware/get_job` at any point with the job's progress, parsed
+from the output it has replayed (or from `jobs`), unless `progress` scripts a
+sequence for that job. `progress_errors` makes the next polls for a job fail,
+and `progress_malformed` makes them answer with an unexpected shape. Every
+poll is recorded in `get_job_polls`, and `polled` is set after each answer.
+
+A job in `waits` holds its follow open until the test sets that event; then
+the events added to `jobs` in the meantime, including a result, are replayed.
+`waiting` is set once a follow is held. After the transcript, each client
+command is answered on its own task, so `get_job` still runs while a follow
+is held.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -43,6 +56,9 @@ from aiohttp.test_utils import TestServer
 from yarl import URL
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+_NINJA = re.compile(r"\[(\d+)/(\d+)\]")
+_UPLOAD_PERCENT = re.compile(r"Uploading:.*?(\d+)%")
 
 Transcript = list[dict[str, Any]]
 
@@ -104,6 +120,25 @@ class FakeDeviceBuilder:
         self.followed: list[str] = []
         self.cleared: list[str] = []
         self.running = asyncio.Event()
+        # `firmware/get_job` answers: a scripted sequence per job (the last
+        # value repeats), else progress parsed from the job's output.
+        self.progress: dict[str, list[int | None]] = {}
+        # How many of the next polls for a job fail with `internal_error`.
+        self.progress_errors: dict[str, int] = {}
+        # How many of the next polls for a job answer with a malformed progress.
+        self.progress_malformed: dict[str, int] = {}
+        # A job whose follow should wait for its event before ending, so a
+        # test can observe its running progress first. `waiting` is set once
+        # a follow is held. Adding events to `jobs` before setting the event
+        # replays them, including the result.
+        self.waits: dict[str, asyncio.Event] = {}
+        self.waiting = asyncio.Event()
+        self.get_job_polls: list[str] = []
+        self.polled = asyncio.Event()
+        # Output lines replayed by the transcript, per followed job, so
+        # get_job reports progress for captured jobs too.
+        self._replayed_output: dict[str, list[str]] = {}
+        self._current_follow: str | None = None
 
     async def handle(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
@@ -118,12 +153,21 @@ class FakeDeviceBuilder:
             if entry["dir"] == "in":
                 if "message_id" in frame:
                     frame = {**frame, "message_id": ids.get(frame["message_id"], frame["message_id"])}
+                if self._current_follow is not None and frame.get("event") == "output":
+                    self._replayed_output.setdefault(self._current_follow, []).append(
+                        str(frame.get("data", ""))
+                    )
                 await ws.send_json(frame)
+                if frame.get("event") == "result":
+                    self._current_follow = None
                 continue
             msg = await ws.receive()
-            # File reads are not part of a transcript: they are answered whenever they come.
-            while msg.type == WSMsgType.TEXT and _is_read(sent := json.loads(msg.data), frame):
-                await self._read(ws, sent)
+            # File reads and progress polls are not part of a transcript:
+            # they are answered whenever they come.
+            while msg.type == WSMsgType.TEXT and _is_side_command(
+                sent := json.loads(msg.data), frame
+            ):
+                await self._answer(ws, sent)
                 msg = await ws.receive()
             if msg.type != WSMsgType.TEXT:
                 if not ids and msg.type in _CLOSING:
@@ -139,17 +183,40 @@ class FakeDeviceBuilder:
                 await ws.close()
                 return ws
             ids[frame["message_id"]] = sent["message_id"]
+            if sent.get("command") == "firmware/follow_job":
+                self._current_follow = sent["args"]["job_id"]
         self.finished = True
         # Leave the socket open until the client closes it, like a real server.
-        async for msg in ws:
-            if msg.type == WSMsgType.TEXT:
-                await self._answer(ws, json.loads(msg.data))
+        # Each command runs on its own, so a held `follow_job` does not stop
+        # `get_job` polls from being answered.
+        tasks: set[asyncio.Task[None]] = set()
+
+        def done(task: asyncio.Task[None]) -> None:
+            tasks.discard(task)
+            if not task.cancelled():
+                task.exception()
+
+        try:
+            async for msg in ws:
+                if msg.type == WSMsgType.TEXT:
+                    task = asyncio.create_task(
+                        self._answer(ws, json.loads(msg.data))
+                    )
+                    tasks.add(task)
+                    task.add_done_callback(done)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         return ws
 
     async def _answer(self, ws: web.WebSocketResponse, sent: dict[str, Any]) -> None:
         message_id = sent["message_id"]
         if sent.get("command") == "firmware/follow_job":
             await self._follow(ws, message_id, sent["args"]["job_id"])
+            return
+        if sent.get("command") == "firmware/get_job":
+            await self._get_job(ws, message_id, sent["args"]["job_id"])
             return
         if sent.get("command") == "firmware/clear_queued_update":
             self.cleared.append(sent["args"]["configuration"])
@@ -160,6 +227,40 @@ class FakeDeviceBuilder:
             await ws.close()
             return
         await self._read(ws, sent)
+
+    async def _get_job(self, ws: web.WebSocketResponse, message_id: str, job_id: str) -> None:
+        self.get_job_polls.append(job_id)
+        failures = self.progress_errors.get(job_id, 0)
+        if failures:
+            self.progress_errors[job_id] = failures - 1
+            await ws.send_json(
+                {
+                    "message_id": message_id,
+                    "error_code": "internal_error",
+                    "details": "Command failed: firmware/get_job",
+                }
+            )
+            self.polled.set()
+            return
+        script = self.progress.get(job_id)
+        malformed = self.progress_malformed.get(job_id, 0)
+        if malformed:
+            self.progress_malformed[job_id] = malformed - 1
+            progress: int | str | None = "halfway"
+        elif script:
+            progress = script.pop(0) if len(script) > 1 else script[0]
+        else:
+            progress = self._job_progress(job_id)
+        await ws.send_json(
+            {"message_id": message_id, "result": {"job_id": job_id, "progress": progress}}
+        )
+        self.polled.set()
+
+    def _job_progress(self, job_id: str) -> int | None:
+        """Progress from a scripted job's output, or from the transcript's replay."""
+        if job_id in self.jobs:
+            return progress_from_events(self.jobs[job_id])
+        return progress_from_lines(self._replayed_output.get(job_id, []))
 
     async def _read(self, ws: web.WebSocketResponse, sent: dict[str, Any]) -> None:
         path = sent["args"]["configuration"]
@@ -188,9 +289,24 @@ class FakeDeviceBuilder:
             )
             return
         events = self.jobs[job_id]
+        sent = 0
         for event in events:
             await ws.send_json({"message_id": message_id, **event})
+            sent += 1
         if any(event["event"] == "result" for event in events):
+            await ws.send_json({"message_id": message_id, "result": None})
+            return
+        wait = self.waits.get(job_id)
+        if wait is None:
+            self.running.set()
+            return
+        # Hold the follow open so the test can observe the running job (and
+        # poll it), then replay whatever it adds to `jobs`, including a result.
+        self.waiting.set()
+        await wait.wait()
+        for event in self.jobs[job_id][sent:]:
+            await ws.send_json({"message_id": message_id, **event})
+        if any(event["event"] == "result" for event in self.jobs[job_id][sent:]):
             await ws.send_json({"message_id": message_id, "result": None})
         else:
             self.running.set()
@@ -199,9 +315,41 @@ class FakeDeviceBuilder:
 _CLOSING = (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED)
 
 
-def _is_read(sent: dict[str, Any], expected: dict[str, Any]) -> bool:
-    """Whether *sent* is a file read where the transcript expects another command."""
-    return bool(sent.get("command") == "devices/get_config" != expected["command"])
+def _is_side_command(sent: dict[str, Any], expected: dict[str, Any]) -> bool:
+    """Whether *sent* is a file read or progress poll where the transcript
+    expects another command."""
+    return bool(
+        sent.get("command") in ("devices/get_config", "firmware/get_job")
+        and sent.get("command") != expected["command"]
+    )
+
+
+def progress_from_events(events: list[dict[str, Any]]) -> int | None:
+    """The progress a job's output lines report, as the Device Builder parses it."""
+    return progress_from_lines(
+        [str(event.get("data", "")) for event in events if event.get("event") == "output"]
+    )
+
+
+def _higher(current: int | None, value: int) -> int:
+    """The higher of *current* and *value*; progress is monotonic within a job."""
+    return value if current is None else max(current, value)
+
+
+def progress_from_lines(lines: list[str]) -> int | None:
+    """Parse ninja `[N/M]` and `Uploading: … NN%` lines, the way the add-on does."""
+    progress: int | None = None
+    for line in lines:
+        match = _NINJA.search(line)
+        if match is not None:
+            done, total = int(match.group(1)), int(match.group(2))
+            if total:
+                progress = _higher(progress, done * 100 // total)
+            continue
+        match = _UPLOAD_PERCENT.search(line)
+        if match is not None:
+            progress = _higher(progress, int(match.group(1)))
+    return progress
 
 
 def job_events(*lines: str, status: str | None = "completed") -> list[dict[str, Any]]:

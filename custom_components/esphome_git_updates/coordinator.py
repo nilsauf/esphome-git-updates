@@ -93,6 +93,9 @@ class _StoredInstall(TypedDict):
     commits: dict[str, str]
     # Where the Install uploads; absent in stores written before ticket 08.
     port: NotRequired[str]
+    # Whether it started with a Clean Build; absent in stores written before
+    # ticket 14, where the progress bands did not need it.
+    clean_build: NotRequired[bool]
 
 
 class _StoredData(TypedDict, total=False):
@@ -112,6 +115,9 @@ class ActiveInstall:
     # The upload address it was started with: it still uploads there if the
     # option changes before it is re-attached.
     port: str
+    # Whether it started with a Clean Build, so its progress bands are known
+    # even when it is re-attached after the clean step.
+    clean_build: bool = False
 
 
 class TrackedConfigStore:
@@ -166,6 +172,7 @@ class TrackedConfigStore:
             tuple(ActiveJob(job["job_id"], job["stage"]) for job in stored["jobs"]),
             stored["commits"],
             stored.get("port", OTA),
+            stored.get("clean_build", False),
         )
 
     async def async_set_active_install(self, active: ActiveInstall) -> None:
@@ -174,6 +181,7 @@ class TrackedConfigStore:
             "jobs": [{"job_id": job.job_id, "stage": job.stage} for job in active.jobs],
             "commits": dict(active.commits),
             "port": active.port,
+            "clean_build": active.clean_build,
         }
         await self._store.async_save(self._data)
 
