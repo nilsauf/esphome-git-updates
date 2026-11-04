@@ -8,8 +8,8 @@
 
 - [x] `hacs.json` declares the integration, with the minimum HA version set to the current stable at first release.
 - [x] The manifest carries a version that matches the release tag.
-- [ ] CI runs the test suite plus HACS and hassfest validation on pushes and pull requests.
-- [ ] Pushing a version tag creates a GitHub release.
+- [x] CI runs the test suite plus HACS and hassfest validation on pushes and pull requests.
+- [x] Pushing a version tag creates a GitHub release.
 - [x] The README explains adding the repo to HACS, the two Device Builder location modes, and the `ota:` and `refresh: always` requirements.
 
 ## Comments
@@ -26,3 +26,7 @@
 **Verified locally:** `hacs.json`, the manifest version (it matches `pyproject.toml`, and the release workflow enforces the tag match), and the README contents.
 
 **Not yet verified (unticked):** "CI runs…" and "Pushing a version tag creates a GitHub release". The repo has no remote yet. They are verified on the first push to `github.com/nilsauf/esphome-git-updates` and the first `v0.1.0` tag. Before that tag, give the GitHub repo a description, topics and enabled issues, or HACS validation fails.
+
+### 2026-11-04: criteria verified
+
+The repo is pushed to `github.com/nilsauf/esphome-git-updates`. CI ran on `main` (runs #1–#3) and the `v0.1.0` tag triggered the Release workflow, which published the GitHub release. Both previously unticked criteria are now ticked; see ticket 12.
