@@ -2,6 +2,7 @@
   "domain": "esphome_git_updates",
   "name": "ESPHome Git Updates",
   "after_dependencies": ["hassio"],
+  "categories": ["diy_makers.boards_hardware"],
   "codeowners": ["@nilsauf"],
   "config_flow": true,
   "documentation": "https://github.com/nilsauf/esphome-git-updates",
