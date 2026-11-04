@@ -3,6 +3,7 @@ optionally its Linked Device (ADR-0005)."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import probatio
@@ -63,6 +64,15 @@ MANUAL_SCHEMA = probatio.Schema(
     }
 )
 
+REAUTH_SCHEMA = probatio.Schema(
+    {
+        probatio.Required(CONF_USERNAME): str,
+        probatio.Required(CONF_PASSWORD): TextSelector(
+            TextSelectorConfig(type=TextSelectorType.PASSWORD)
+        ),
+    }
+)
+
 OPTIONS_SCHEMA = probatio.Schema(
     {
         probatio.Required(CONF_CLEAN_BUILD, default=DEFAULT_CLEAN_BUILD): bool,
@@ -107,6 +117,50 @@ class EsphomeGitUpdatesConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_manual(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Ask for a manual Device Builder URL and optional credentials."""
         return await self._async_step_location("manual", MANUAL_SCHEMA, user_input)
+
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
+        """The Device Builder rejected the stored credentials: ask for new ones."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Check new credentials against the Device Builder before saving them."""
+        entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            location = {
+                **entry.data,
+                CONF_USERNAME: user_input[CONF_USERNAME],
+                CONF_PASSWORD: user_input[CONF_PASSWORD],
+            }
+            try:
+                # Logging in is the check. A command would also depend on the
+                # Device Builder still holding the configuration.
+                async with connect_to_device_builder(self.hass, location):
+                    pass
+            except AuthenticationFailed:
+                errors["base"] = "invalid_auth"
+            except UnsupportedServerVersion:
+                errors["base"] = "unsupported_version"
+            except CONNECTION_ERRORS:
+                errors["base"] = "cannot_connect"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={
+                        CONF_USERNAME: user_input[CONF_USERNAME],
+                        CONF_PASSWORD: user_input[CONF_PASSWORD],
+                    },
+                )
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=self.add_suggested_values_to_schema(
+                REAUTH_SCHEMA, {CONF_USERNAME: entry.data.get(CONF_USERNAME, "")}
+            ),
+            errors=errors,
+            description_placeholders={"name": entry.title},
+        )
 
     async def async_step_configuration(
         self, user_input: dict[str, Any] | None = None

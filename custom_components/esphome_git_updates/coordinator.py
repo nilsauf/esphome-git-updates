@@ -15,7 +15,14 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .connection import CONNECTION_ERRORS, connect_to_device_builder
 from .const import DOMAIN, VERSION_POLL_INTERVAL
-from .device_builder import OTA, ActiveJob, UnexpectedFrame, UnsupportedServerVersion
+from .device_builder import (
+    OTA,
+    ActiveJob,
+    AuthenticationFailed,
+    UnexpectedFrame,
+    UnsupportedServerVersion,
+)
+from .reauth import Reauthentication
 
 if TYPE_CHECKING:
     from .git_coordinator import GitSourcesCoordinator
@@ -34,6 +41,7 @@ class RuntimeData:
     git_coordinator: GitSourcesCoordinator
     store: TrackedConfigStore
     linked_device: LinkedDevice | None
+    reauth: Reauthentication
 
 
 type EsphomeGitUpdatesConfigEntry = ConfigEntry[RuntimeData]
@@ -211,7 +219,11 @@ class EsphomeVersionCoordinator(DataUpdateCoordinator[str]):
     config_entry: EsphomeGitUpdatesConfigEntry
 
     def __init__(
-        self, hass: HomeAssistant, entry: EsphomeGitUpdatesConfigEntry, issue: ProtocolIssue
+        self,
+        hass: HomeAssistant,
+        entry: EsphomeGitUpdatesConfigEntry,
+        issue: ProtocolIssue,
+        reauth: Reauthentication,
     ) -> None:
         super().__init__(
             hass,
@@ -221,14 +233,20 @@ class EsphomeVersionCoordinator(DataUpdateCoordinator[str]):
             update_interval=VERSION_POLL_INTERVAL,
         )
         self._issue = issue
+        self._reauth = reauth
 
     async def _async_update_data(self) -> str:
+        if self._reauth.required:
+            raise UpdateFailed("waiting for new Device Builder credentials")
         try:
             async with connect_to_device_builder(self.hass, self.config_entry.data) as client:
                 version = client.esphome_version
         except (UnsupportedServerVersion, UnexpectedFrame) as err:
             report_protocol_drift(self._issue, "version", err)
             raise UpdateFailed(str(err)) from err
+        except AuthenticationFailed as err:
+            self._reauth.async_require(err)
+            raise UpdateFailed(f"the Device Builder refused the login: {err}") from err
         except CONNECTION_ERRORS as err:
             raise UpdateFailed(f"cannot reach the Device Builder: {err}") from err
         self._issue.clear("version")

@@ -30,6 +30,7 @@ from .coordinator import (
 )
 from .device_builder import (
     ActiveJob,
+    AuthenticationFailed,
     DeviceBuilderClient,
     InstallOutcome,
     InstallResult,
@@ -93,6 +94,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         self._store: TrackedConfigStore = entry.runtime_data.store
         self._git: GitSourcesCoordinator = entry.runtime_data.git_coordinator
         self._linked: LinkedDevice | None = entry.runtime_data.linked_device
+        self._reauth = entry.runtime_data.reauth
         # Whether the unknown Installed ESPHome Version has been warned about.
         self._warned_unknown = False
         self._attr_unique_id = entry.entry_id
@@ -349,6 +351,10 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
             raise HomeAssistantError(
                 f"The outcome of the Install of {self._entry.title} is unknown"
             ) from None
+        except AuthenticationFailed as err:
+            self._reauth.async_require(err)
+            await self._store.async_clear_active_install()
+            self._fail(log.stage, str(err), log)
         except CONNECTION_ERRORS as err:
             await self._store.async_clear_active_install()
             self._fail(log.stage, str(err), log)

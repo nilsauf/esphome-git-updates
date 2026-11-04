@@ -33,6 +33,11 @@ class DeviceBuilderNotFound(DeviceBuilderError):
     """Neither the add-on nor core's esphome integration gives a Device Builder URL."""
 
 
+def is_manual_location(location: Mapping[str, Any]) -> bool:
+    """Whether *location* is a manual URL rather than the add-on (ADR-0002)."""
+    return CONF_ADDON_SLUG not in location
+
+
 @dataclass(frozen=True)
 class ResolvedLocation:
     """The URL and credentials to connect to, worked out from a stored location."""
@@ -46,7 +51,7 @@ async def async_resolve_location(
     hass: HomeAssistant, location: Mapping[str, Any]
 ) -> ResolvedLocation:
     """Turn a stored location into the URL and credentials to connect with."""
-    if CONF_ADDON_SLUG not in location:
+    if is_manual_location(location):
         return ResolvedLocation(
             location[CONF_URL], location.get(CONF_USERNAME), location.get(CONF_PASSWORD)
         )

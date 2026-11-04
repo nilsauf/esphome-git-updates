@@ -38,6 +38,7 @@ files = [
     "tests/test_pre_install_checks.py",
     "tests/test_progress.py",
     "tests/test_release_notes.py",
+    "tests/test_reauth.py",
     "tests/test_update.py",
     "tests/test_versions.py",
     "tests/tracked_config.py",

@@ -20,6 +20,7 @@ from .coordinator import (
     report_protocol_drift,
 )
 from .device_builder import (
+    AuthenticationFailed,
     CommandFailed,
     DeviceBuilderClient,
     UnexpectedFrame,
@@ -36,6 +37,7 @@ from .git_sources import (
 )
 from .options import Options
 from .pre_install import PreInstallCheck, PreInstallIssues
+from .reauth import Reauthentication
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,6 +86,7 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
         entry: EsphomeGitUpdatesConfigEntry,
         store: TrackedConfigStore,
         issue: ProtocolIssue,
+        reauth: Reauthentication,
     ) -> None:
         super().__init__(
             hass,
@@ -94,6 +97,7 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
         )
         self._store = store
         self._issue = issue
+        self._reauth = reauth
         self._untrackable: tuple[str, ...] = ()
         self._failing: set[str] = set()
         self._pre_install_issues = PreInstallIssues(hass, entry)
@@ -102,6 +106,8 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
         self.comparisons = GitHubComparisons(hass, entry)
 
     async def _async_update_data(self) -> dict[str, TrackedGitSource]:
+        if self._reauth.required:
+            raise UpdateFailed("waiting for new Device Builder credentials")
         discovery = await self._discover()
         self._log_untrackable(discovery.untrackable)
         previous = self.data or {}
@@ -204,6 +210,9 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
             raise UpdateFailed(str(err)) from err
         except CommandFailed as err:
             raise UpdateFailed(f"cannot read {configuration}: {err}") from err
+        except AuthenticationFailed as err:
+            self._reauth.async_require(err)
+            raise UpdateFailed(f"the Device Builder refused the login: {err}") from err
         except CONNECTION_ERRORS as err:
             raise UpdateFailed(f"cannot reach the Device Builder: {err}") from err
         except DiscoveryError as err:

@@ -19,6 +19,7 @@ from .git_coordinator import GitSourcesCoordinator
 from .linked_device import LinkedDevice
 from .options import Options
 from .pre_install import missing_ota_issue_id, refresh_policy_issue_id
+from .reauth import Reauthentication
 
 PLATFORMS = [Platform.UPDATE]
 
@@ -28,7 +29,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: EsphomeGitUpdatesConfigE
     store = TrackedConfigStore(hass, entry.entry_id)
     await store.async_load()
     issue = ProtocolIssue(hass, entry)
-    coordinator = EsphomeVersionCoordinator(hass, entry, issue)
+    reauth = Reauthentication(hass, entry)
+    coordinator = EsphomeVersionCoordinator(hass, entry, issue, reauth)
     await coordinator.async_config_entry_first_refresh()
     if CONF_DEVICE_ID not in entry.data and store.installed_esphome_version is None:
         # Seeding: a new entry assumes the device already runs the Available
@@ -37,11 +39,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: EsphomeGitUpdatesConfigE
         # when that device has since gone (ADR-0003).
         await store.async_set_installed_esphome_version(coordinator.data)
     linked_device = LinkedDevice.of(hass, entry)
-    git_coordinator = GitSourcesCoordinator(hass, entry, store, issue)
+    git_coordinator = GitSourcesCoordinator(hass, entry, store, issue, reauth)
     # Not a first refresh: Git Sources that cannot be read must not hold up
     # the ESPHome update. The poller logs why and tries again at its next poll.
     await git_coordinator.async_refresh()
-    entry.runtime_data = RuntimeData(coordinator, git_coordinator, store, linked_device)
+    entry.runtime_data = RuntimeData(coordinator, git_coordinator, store, linked_device, reauth)
     # Not reloaded on an options change: that would interrupt a running Install.
     # Clean Build and the upload address are read when Install is pressed.
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))

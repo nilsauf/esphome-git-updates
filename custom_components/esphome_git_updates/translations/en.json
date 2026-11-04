@@ -33,6 +33,18 @@
           "password": "Only needed if the Device Builder asks for a login."
         }
       },
+      "reauth_confirm": {
+        "title": "Re-authenticate with the Device Builder",
+        "description": "The Device Builder for {name} refused the stored username or password. Enter the current credentials.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        },
+        "data_description": {
+          "username": "The username the Device Builder now expects.",
+          "password": "The password the Device Builder now expects."
+        }
+      },
       "configuration": {
         "title": "Tracked Config",
         "description": "The ESPHome configuration to watch for updates.",

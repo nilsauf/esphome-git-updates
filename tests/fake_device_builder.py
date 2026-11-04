@@ -116,6 +116,13 @@ class FakeDeviceBuilder:
         self.url = ""
         self.mismatches: list[str] = []
         self.finished = False
+        # How many connections the client opened, for tests that check polling stopped.
+        self.connections = 0
+        # The arguments of every `auth/login` the client sent.
+        self.logins: list[dict[str, Any]] = []
+        # One transcript per connection, in order; the last one repeats. Without
+        # any, every connection replays `transcript`.
+        self.transcripts: list[Transcript] = []
         self.jobs: dict[str, list[dict[str, Any]]] = {}
         self.followed: list[str] = []
         self.cleared: list[str] = []
@@ -141,10 +148,17 @@ class FakeDeviceBuilder:
         self._current_follow: str | None = None
 
     async def handle(self, request: web.Request) -> web.WebSocketResponse:
+        self.connections += 1
+        if self.transcripts:
+            transcript = (
+                self.transcripts.pop(0) if len(self.transcripts) > 1 else self.transcripts[0]
+            )
+        else:
+            transcript = self.transcript
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         ids: dict[str, str] = {}
-        for entry in self.transcript:
+        for entry in transcript:
             if entry["dir"] == "close":
                 self.finished = True
                 await ws.close()
@@ -183,6 +197,8 @@ class FakeDeviceBuilder:
                 await ws.close()
                 return ws
             ids[frame["message_id"]] = sent["message_id"]
+            if sent.get("command") == "auth/login":
+                self.logins.append(sent["args"])
             if sent.get("command") == "firmware/follow_job":
                 self._current_follow = sent["args"]["job_id"]
         self.finished = True
