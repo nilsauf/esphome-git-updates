@@ -22,7 +22,7 @@ from homeassistant.helpers import (
 )
 
 from custom_components.esphome_git_updates.const import DOMAIN
-from custom_components.esphome_git_updates.coordinator import protocol_issue_id
+from custom_components.esphome_git_updates.connection import protocol_issue_id
 from fake_device_builder import (
     FakeDeviceBuilder,
     Transcript,
@@ -176,40 +176,6 @@ async def _poll(hass: HomeAssistant, freezer: FrozenDateTimeFactory) -> None:
     freezer.tick(timedelta(minutes=5, seconds=1))
     async_fire_time_changed(hass)
     await hass.async_block_till_done(wait_background_tasks=True)
-
-
-@pytest.mark.parametrize(
-    ("handshake", "translation_key"),
-    [
-        (server_info("2.0.0"), "unsupported_server_version"),
-        ({"dir": "in", "frame": {"hello": "world"}}, "unexpected_frame"),
-    ],
-)
-async def test_a_device_builder_that_answers_unexpectedly_raises_a_repair_issue_until_it_is_healthy(
-    hass: HomeAssistant,
-    builder: tuple[str, FakeDeviceBuilder],
-    freezer: FrozenDateTimeFactory,
-    issue_registry: ir.IssueRegistry,
-    handshake: dict[str, Any],
-    translation_key: str,
-) -> None:
-    url, fake = builder
-    entry = await _set_up(hass, url)
-    healthy = fake.transcript
-
-    fake.transcript = [handshake]
-    await _poll(hass, freezer)
-
-    issue = issue_registry.async_get_issue(DOMAIN, protocol_issue_id(entry.entry_id))
-    assert issue is not None
-    assert issue.translation_key == translation_key
-    assert hass.states.get(ENTITY_ID).state == STATE_UNAVAILABLE  # type: ignore[union-attr]
-
-    fake.transcript = healthy
-    await _poll(hass, freezer)
-
-    assert issue_registry.async_get_issue(DOMAIN, protocol_issue_id(entry.entry_id)) is None
-    assert hass.states.get(ENTITY_ID).state == STATE_OFF  # type: ignore[union-attr]
 
 
 async def test_an_unreachable_device_builder_is_not_a_repair_issue(

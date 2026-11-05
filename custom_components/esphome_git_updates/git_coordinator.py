@@ -11,21 +11,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .connection import connect_to_device_builder
+from .connection import DeviceBuilderSession, DeviceBuilderUnavailable, ProtocolProblem
 from .const import CONF_CONFIGURATION, DOMAIN
-from .coordinator import (
-    EsphomeGitUpdatesConfigEntry,
-    ProtocolIssue,
-    TrackedConfigStore,
-)
-from .device_builder import (
-    CONNECTION_ERRORS,
-    AuthenticationFailed,
-    CommandFailed,
-    DeviceBuilderClient,
-    UnexpectedFrame,
-    UnsupportedServerVersion,
-)
+from .coordinator import EsphomeGitUpdatesConfigEntry, TrackedConfigStore
+from .device_builder import CommandFailed, DeviceBuilderClient
 from .comparisons import GitHubComparisons, SourceChange
 from .git_remote import GitRemoteError, RefKind, RemoteRef, resolve_ref
 from .git_sources import (
@@ -37,7 +26,6 @@ from .git_sources import (
 )
 from .options import Options
 from .pre_install import PreInstallCheck, PreInstallIssues
-from .reauth import Reauthentication
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -85,8 +73,7 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
         hass: HomeAssistant,
         entry: EsphomeGitUpdatesConfigEntry,
         store: TrackedConfigStore,
-        issue: ProtocolIssue,
-        reauth: Reauthentication,
+        session: DeviceBuilderSession,
     ) -> None:
         super().__init__(
             hass,
@@ -96,8 +83,7 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
             update_interval=Options.of(entry.options).git_poll_interval,
         )
         self._store = store
-        self._issue = issue
-        self._reauth = reauth
+        self._session = session
         self._untrackable: tuple[str, ...] = ()
         self._failing: set[str] = set()
         self._pre_install_issues = PreInstallIssues(hass, entry)
@@ -106,8 +92,6 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
         self.comparisons = GitHubComparisons(hass, entry)
 
     async def _async_update_data(self) -> dict[str, TrackedGitSource]:
-        if self._reauth.required:
-            raise UpdateFailed("waiting for new Device Builder credentials")
         discovery = await self._discover()
         self._log_untrackable(discovery.untrackable)
         previous = self.data or {}
@@ -196,29 +180,26 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
     async def _discover(self) -> Discovery:
         configuration = self.config_entry.data[CONF_CONFIGURATION]
         try:
-            async with connect_to_device_builder(self.hass, self.config_entry.data) as client:
-                discovery = await discover_git_sources(
-                    configuration, _reader(client, configuration)
-                )
-        except _ReadRefused as err:
-            # The Device Builder may have started restricting reads to device
-            # files, as its MCP layer does; then includes stop resolving (ADR-0006).
-            self._issue.report(_POLLER, "include_refused", {"file": err.path, "error": err.details})
-            raise UpdateFailed(f"the Device Builder refused to read {err}") from err
-        except (UnsupportedServerVersion, UnexpectedFrame) as err:
-            self._issue.report_drift(_POLLER, err)
+            async with self._session.connect(_POLLER) as client:
+                try:
+                    return await discover_git_sources(
+                        configuration, _reader(client, configuration)
+                    )
+                except _ReadRefused as err:
+                    # The Device Builder may have started restricting reads to
+                    # device files, as its MCP layer does; then includes stop
+                    # resolving (ADR-0006).
+                    raise ProtocolProblem(
+                        f"the Device Builder refused to read {err}",
+                        "include_refused",
+                        {"file": err.path, "error": err.details},
+                    ) from err
+        except DeviceBuilderUnavailable as err:
             raise UpdateFailed(str(err)) from err
         except CommandFailed as err:
             raise UpdateFailed(f"cannot read {configuration}: {err}") from err
-        except AuthenticationFailed as err:
-            self._reauth.async_require(err)
-            raise UpdateFailed(f"the Device Builder refused the login: {err}") from err
-        except CONNECTION_ERRORS as err:
-            raise UpdateFailed(f"cannot reach the Device Builder: {err}") from err
         except DiscoveryError as err:
             raise UpdateFailed(f"cannot read the Git Sources of {configuration}: {err}") from err
-        self._issue.clear(_POLLER)
-        return discovery
 
     def _log_untrackable(self, untrackable: tuple[str, ...]) -> None:
         if untrackable != self._untrackable:

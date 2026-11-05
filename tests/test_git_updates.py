@@ -18,7 +18,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
 
 from custom_components.esphome_git_updates.const import DOMAIN
-from custom_components.esphome_git_updates.coordinator import protocol_issue_id
+from custom_components.esphome_git_updates.connection import protocol_issue_id
 from fake_device_builder import FakeDeviceBuilder, serve, server_info
 from git_repo import GitRepo
 from tracked_config import CONFIGURATION, ENTITY_ID, OTA, install, set_up, tick
@@ -302,6 +302,20 @@ async def test_git_sources_that_cannot_be_read_at_setup_do_not_hold_up_the_espho
     state = _state(hass)
     assert state.state == STATE_OFF
     assert state.attributes["installed_version"] == "2026.10.1"
+    assert list(issue_registry.issues) == []
+
+
+async def test_a_device_builder_that_cannot_be_reached_fails_the_git_poll_without_a_repair_issue(
+    hass: HomeAssistant, builder: FakeDeviceBuilder, issue_registry: ir.IssueRegistry
+) -> None:
+    entry = await set_up(hass, builder)
+    git = entry.runtime_data.git_coordinator
+    builder.transcript = [{"dir": "close"}]
+
+    await git.async_refresh()
+
+    assert not git.last_update_success
+    assert str(git.last_exception).startswith("cannot reach the Device Builder: ")
     assert list(issue_registry.issues) == []
 
 

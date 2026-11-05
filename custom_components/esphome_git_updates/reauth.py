@@ -16,11 +16,11 @@ _LOGGER = logging.getLogger(__name__)
 class Reauthentication:
     """The entry's login state after the Device Builder rejects its credentials.
 
-    Manual entries ask the user for new credentials. Pollers ask `required`
-    before connecting, so once the credentials are rejected they are not tried
-    again: the Device Builder answers repeated failed logins with `rate_limited`
-    (ticket 13). A successful reauth reloads the entry, which builds a fresh one
-    of these.
+    Manual entries ask the user for new credentials. The entry's Device
+    Builder session asks `required` before every connection, so once the
+    credentials are rejected no caller tries them again: the Device Builder
+    answers repeated failed logins with `rate_limited` (ticket 13). A
+    successful reauth reloads the entry, which builds a fresh one of these.
     """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:

@@ -53,9 +53,23 @@ class DeviceBuilderError(Exception):
     """Base class for every error this client raises."""
 
 
-# Everything that means "could not talk to the Device Builder". Catch the more
-# specific DeviceBuilderError subclasses before this when they need their own handling.
+# Everything that means "could not talk to the Device Builder", for the config
+# flow and the CLI. An entry's pollers and Install go through its
+# DeviceBuilderSession instead (`connection.py`). Catch the more specific
+# DeviceBuilderError subclasses before this when they need their own handling.
 CONNECTION_ERRORS = (DeviceBuilderError, aiohttp.ClientError, OSError, TimeoutError)
+
+
+class DeviceBuilderUnavailable(Exception):
+    """The Device Builder cannot be used now: unreachable, refusing the login,
+    waiting for new credentials, or answering in a way this integration does
+    not understand.
+
+    Raised by the entry's Device Builder session (`connection.py`), never by
+    this client, so it is no DeviceBuilderError. It lives here because the
+    HA-free Install run catches it too. The original error, if any, is the
+    `__cause__`.
+    """
 
 
 class UnexpectedFrame(DeviceBuilderError):

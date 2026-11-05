@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Callable, Mapping
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -13,6 +13,7 @@ import pytest
 import aiohttp
 
 from custom_components.esphome_git_updates import device_builder
+from custom_components.esphome_git_updates.device_builder import DeviceBuilderUnavailable
 from custom_components.esphome_git_updates.install import (
     ActiveInstall,
     DeviceOffline,
@@ -60,28 +61,43 @@ class FakeBookkeeping:
 
 
 @dataclass
-class FakeReauth:
-    rejected: list[device_builder.AuthenticationFailed] = field(default_factory=list)
+class FakeSession:
+    """The entry's Device Builder session as the Install sees it.
 
-    def async_require(self, err: device_builder.AuthenticationFailed) -> None:
-        self.rejected.append(err)
+    It connects to the fake Device Builder, and turns what the real session
+    handles into DeviceBuilderUnavailable; `CommandFailed` and `JobNotFound`
+    pass through. The reauth gate and the Repair issue are the real session's,
+    tested in test_connection.py.
+    """
 
+    url: str | None
+    credentials: tuple[str, str] | None = None
+    # (name, long_running) of every connection.
+    connections: list[tuple[str, bool]] = field(default_factory=list)
+    # The names whose block exited without an exception.
+    clean_exits: list[str] = field(default_factory=list)
 
-@dataclass
-class FakeIssue:
-    """The protocol-drift Repair issue: name -> the kind of drift reported under it."""
-
-    problems: dict[str, str] = field(default_factory=dict)
-
-    def report_drift(
-        self,
-        name: str,
-        err: device_builder.UnsupportedServerVersion | device_builder.UnexpectedFrame,
-    ) -> None:
-        self.problems[name] = type(err).__name__
-
-    def clear(self, name: str) -> None:
-        self.problems.pop(name, None)
+    @asynccontextmanager
+    async def connect(
+        self, name: str, *, long_running: bool = False
+    ) -> AsyncIterator[device_builder.DeviceBuilderClient]:
+        self.connections.append((name, long_running))
+        if self.url is None:
+            raise DeviceBuilderUnavailable("cannot reach the Device Builder: connection refused")
+        username, password = self.credentials or (None, None)
+        try:
+            async with (
+                aiohttp.ClientSession() as http,
+                device_builder.connect(
+                    http, self.url, username=username, password=password
+                ) as client,
+            ):
+                yield client
+        except (device_builder.CommandFailed, device_builder.JobNotFound):
+            raise
+        except (device_builder.DeviceBuilderError, aiohttp.ClientError, OSError) as err:
+            raise DeviceBuilderUnavailable(str(err)) from err
+        self.clean_exits.append(name)
 
 
 @dataclass
@@ -89,47 +105,28 @@ class Run:
     ending: InstallEnding
     fake: FakeDeviceBuilder
     bookkeeping: FakeBookkeeping
-    reauth: FakeReauth
-    issue: FakeIssue
+    session: FakeSession
     percentages: list[int]
-
-
-def _connector(
-    url: str, credentials: tuple[str, str] | None
-) -> Callable[[], AbstractAsyncContextManager[device_builder.DeviceBuilderClient]]:
-    username, password = credentials or (None, None)
-
-    @asynccontextmanager
-    async def connect() -> AsyncIterator[device_builder.DeviceBuilderClient]:
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(
-                session, url, username=username, password=password
-            ) as client:
-                yield client
-
-    return connect
 
 
 async def _run(
     transcript: Transcript,
     plan: InstallPlan = PLAN,
     *,
-    issue: FakeIssue | None = None,
-    credentials: tuple[str, str] | None = None,
     jobs: dict[str, list[dict[str, Any]]] | None = None,
     reattach: ActiveInstall | None = None,
 ) -> Run:
-    bookkeeping, reauth = FakeBookkeeping(), FakeReauth()
-    issue = issue if issue is not None else FakeIssue()
+    bookkeeping = FakeBookkeeping()
     percentages: list[int] = []
     async with serve(transcript) as (url, fake):
         fake.jobs = jobs or {}
-        runner = InstallRunner(CONFIGURATION, _connector(url, credentials), bookkeeping, reauth, issue)
+        session = FakeSession(url)
+        runner = InstallRunner(CONFIGURATION, session, bookkeeping)
         if reattach is None:
             ending = await runner.run(plan, percentages.append)
         else:
             ending = await runner.reattach(reattach, percentages.append)
-    return Run(ending, fake, bookkeeping, reauth, issue, percentages)
+    return Run(ending, fake, bookkeeping, session, percentages)
 
 
 def _with_answer(transcript: Transcript, command: str, result: Any) -> Transcript:
@@ -147,7 +144,7 @@ def _with_answer(transcript: Transcript, command: str, result: Any) -> Transcrip
     ]
 
 
-async def test_a_device_builder_that_answers_an_install_unexpectedly_reports_drift_and_fails() -> None:
+async def test_a_device_builder_that_answers_an_install_unexpectedly_fails_it() -> None:
     transcript = _with_answer(
         install_transcript("install_clean_success"), "firmware/install", {"job": "?"}
     )
@@ -155,9 +152,33 @@ async def test_a_device_builder_that_answers_an_install_unexpectedly_reports_dri
     run = await _run(transcript)
 
     assert isinstance(run.ending, Failed)
-    assert run.issue.problems == {"install": "UnexpectedFrame"}
+    assert run.ending.stage == "compile"
+    assert "unexpected frame" in run.ending.error
     assert run.bookkeeping.recorded is None
     assert run.bookkeeping.active is None
+    # The session saw the drift, so it stays reported.
+    assert run.session.clean_exits == []
+
+
+async def test_a_refused_install_command_fails_at_its_stage_and_clears_no_drift() -> None:
+    transcript = install_transcript("install_clean_success")
+    at = next(
+        i
+        for i, step in enumerate(transcript)
+        if step["dir"] == "out" and step["frame"]["command"] == "firmware/install"
+    )
+    message_id = transcript[at + 1]["frame"]["message_id"]
+    refused = {"message_id": message_id, "error_code": "busy", "details": "already compiling"}
+
+    run = await _run([*transcript[: at + 1], {"dir": "in", "frame": refused}])
+
+    assert isinstance(run.ending, Failed)
+    assert (run.ending.stage, run.ending.error) == (
+        "compile",
+        "firmware/install failed: busy: already compiling",
+    )
+    assert run.bookkeeping.active is None
+    assert run.session.clean_exits == []
 
 
 async def test_a_successful_install_records_the_version_and_the_commits_seen_when_it_started() -> None:
@@ -168,14 +189,13 @@ async def test_a_successful_install_records_the_version_and_the_commits_seen_whe
     assert run.ending.notification is None
     assert run.bookkeeping.recorded == ("2026.10.1", COMMITS)
     assert run.bookkeeping.active is None
-    assert run.issue.problems == {}
+    # A long-running connection, whose clean exit clears the Install's drift.
+    assert run.session.connections == [("install", True)]
+    assert run.session.clean_exits == ["install"]
 
 
-async def test_a_failed_compile_fails_at_compile_with_the_log_tail_and_clears_earlier_drift() -> None:
-    run = await _run(
-        install_transcript("install_compile_failed"),
-        issue=FakeIssue({"install": "UnexpectedFrame", "git_sources": "UnexpectedFrame"}),
-    )
+async def test_a_failed_compile_fails_at_compile_with_the_log_tail_and_exits_the_session_cleanly() -> None:
+    run = await _run(install_transcript("install_compile_failed"))
 
     assert isinstance(run.ending, Failed)
     assert run.ending.stage == "compile"
@@ -185,8 +205,8 @@ async def test_a_failed_compile_fails_at_compile_with_the_log_tail_and_clears_ea
     assert "[26/30] CXX obj/src/main.cpp.o" in message
     assert run.bookkeeping.recorded is None
     assert run.bookkeeping.active is None
-    # The Install reached the Device Builder, so its drift is over; a poller's is not.
-    assert run.issue.problems == {"git_sources": "UnexpectedFrame"}
+    # The Install got a result from the Device Builder, so its drift is over.
+    assert run.session.clean_exits == ["install"]
 
 
 async def test_an_install_the_device_builder_defers_ends_as_device_offline() -> None:
@@ -244,48 +264,7 @@ async def test_a_connection_lost_mid_compile_fails_at_the_stage_reached_and_forg
     # Its jobs may still run, but it is not followed again (ticket 16).
     assert run.bookkeeping.active is None
     assert run.bookkeeping.recorded is None
-    assert run.issue.problems == {}
-
-
-async def test_a_rejected_login_asks_for_new_credentials_and_fails_the_install() -> None:
-    transcript: Transcript = [
-        server_info(requires_auth=True),
-        {"dir": "out", "frame": {"command": "auth/login", "message_id": "1",
-                                 "args": {"username": "REDACTED", "password": "REDACTED"}}},
-        {"dir": "in", "frame": {"message_id": "1", "error_code": "not_authenticated",
-                                "details": "Invalid credentials"}},
-    ]
-
-    run = await _run(transcript, credentials=("admin", "stale"))
-
-    assert isinstance(run.ending, Failed)
-    assert "login refused" in run.ending.error
-    assert [type(err) for err in run.reauth.rejected] == [device_builder.AuthenticationFailed]
-    assert run.bookkeeping.active is None
-
-
-async def test_an_install_that_never_reaches_the_jobs_leaves_earlier_drift_in_place() -> None:
-    rejected_login: Transcript = [
-        server_info(requires_auth=True),
-        {"dir": "out", "frame": {"command": "auth/login", "message_id": "1",
-                                 "args": {"username": "REDACTED", "password": "REDACTED"}}},
-        {"dir": "in", "frame": {"message_id": "1", "error_code": "not_authenticated",
-                                "details": "Invalid credentials"}},
-    ]
-
-    lost = await _run(
-        [server_info(), {"dir": "close"}], issue=FakeIssue({"install": "UnexpectedFrame"})
-    )
-    refused = await _run(
-        rejected_login,
-        issue=FakeIssue({"install": "UnexpectedFrame"}),
-        credentials=("admin", "stale"),
-    )
-
-    assert isinstance(lost.ending, Failed) and isinstance(refused.ending, Failed)
-    # Neither saw how the Device Builder answers an Install, so the drift may remain.
-    assert lost.issue.problems == {"install": "UnexpectedFrame"}
-    assert refused.issue.problems == {"install": "UnexpectedFrame"}
+    assert run.session.clean_exits == []
 
 
 async def test_the_jobs_still_to_follow_are_kept_until_the_install_ends() -> None:
@@ -318,17 +297,17 @@ async def test_a_connection_lost_before_any_output_fails_at_the_first_stage() ->
     assert (compile_run.ending.stage, clean_run.ending.stage) == ("compile", "clean")
 
 
-async def test_a_device_builder_that_cannot_be_reached_fails_at_connect() -> None:
-    @asynccontextmanager
-    async def unreachable() -> AsyncIterator[device_builder.DeviceBuilderClient]:
-        raise aiohttp.ClientConnectionError("connection refused")
-        yield  # pragma: no cover
-
-    runner = InstallRunner(CONFIGURATION, unreachable, FakeBookkeeping(), FakeReauth(), FakeIssue())
+async def test_an_unavailable_device_builder_fails_the_install_at_connect() -> None:
+    bookkeeping = FakeBookkeeping()
+    runner = InstallRunner(CONFIGURATION, FakeSession(None), bookkeeping)
     ending = await runner.run(PLAN, lambda percentage: None)
 
     assert isinstance(ending, Failed)
-    assert ending.stage == "connect"
+    assert (ending.stage, ending.error) == (
+        "connect",
+        "cannot reach the Device Builder: connection refused",
+    )
+    assert bookkeeping.active is None
 
 
 async def test_progress_moves_through_the_compile_and_upload_bands() -> None:
@@ -483,9 +462,7 @@ async def test_a_failed_progress_poll_is_logged_and_the_install_succeeds(
     async with serve(transcript) as (url, fake):
         fake.jobs = jobs
         fake.progress_errors = {"c1": 1}
-        runner = InstallRunner(
-            CONFIGURATION, _connector(url, None), bookkeeping, FakeReauth(), FakeIssue()
-        )
+        runner = InstallRunner(CONFIGURATION, FakeSession(url), bookkeeping)
         ending = await runner.run(PLAN, lambda percentage: None)
 
     assert ending == Installed()
@@ -503,9 +480,7 @@ async def test_a_malformed_progress_poll_is_logged_and_the_install_succeeds(
             "u1": job_events("Uploading: [==========] 100% Done...", status="completed"),
         }
         fake.progress_malformed = {"c1": 1}
-        runner = InstallRunner(
-            CONFIGURATION, _connector(url, None), FakeBookkeeping(), FakeReauth(), FakeIssue()
-        )
+        runner = InstallRunner(CONFIGURATION, FakeSession(url), FakeBookkeeping())
         ending = await runner.run(PLAN, lambda percentage: None)
 
     assert ending == Installed()

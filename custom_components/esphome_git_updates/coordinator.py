@@ -9,23 +9,13 @@ from typing import TYPE_CHECKING, NotRequired, TypedDict
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .connection import connect_to_device_builder
+from .connection import DeviceBuilderSession, DeviceBuilderUnavailable
 from .const import DOMAIN, VERSION_POLL_INTERVAL
-from .device_builder import (
-    CONNECTION_ERRORS,
-    OTA,
-    ActiveJob,
-    AuthenticationFailed,
-    Stage,
-    UnexpectedFrame,
-    UnsupportedServerVersion,
-)
+from .device_builder import OTA, ActiveJob, Stage
 from .install import ActiveInstall
-from .reauth import Reauthentication
 
 if TYPE_CHECKING:
     from .git_coordinator import GitSourcesCoordinator
@@ -44,63 +34,10 @@ class RuntimeData:
     git_coordinator: GitSourcesCoordinator
     store: TrackedConfigStore
     linked_device: LinkedDevice | None
-    reauth: Reauthentication
-    issue: ProtocolIssue
+    session: DeviceBuilderSession
 
 
 type EsphomeGitUpdatesConfigEntry = ConfigEntry[RuntimeData]
-
-
-def protocol_issue_id(entry_id: str) -> str:
-    """The Repair issue raised when an entry's Device Builder answers unexpectedly."""
-    return f"device_builder_protocol_{entry_id}"
-
-
-class ProtocolIssue:
-    """The one protocol-drift Repair issue of an entry (ADR-0002).
-
-    Several pollers and the Install talk to the Device Builder. Each poller or
-    the Install reports under its own name, and the issue stays until every one
-    of them is healthy again, so one's success does not hide another's drift.
-    """
-
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        self._hass = hass
-        self._title = entry.title
-        self._issue_id = protocol_issue_id(entry.entry_id)
-        self._problems: dict[str, tuple[str, dict[str, str]]] = {}
-
-    def report(self, name: str, translation_key: str, placeholders: dict[str, str]) -> None:
-        self._problems[name] = (translation_key, placeholders)
-        self._raise(translation_key, placeholders)
-
-    def report_drift(self, name: str, err: UnsupportedServerVersion | UnexpectedFrame) -> None:
-        """Report, under *name*, that the Device Builder answered in a way this
-        integration does not understand."""
-        if isinstance(err, UnsupportedServerVersion):
-            self.report(
-                name, "unsupported_server_version", {"server_version": err.server_version}
-            )
-        else:
-            self.report(name, "unexpected_frame", {"error": str(err)})
-
-    def clear(self, name: str) -> None:
-        if self._problems.pop(name, None) is not None and self._problems:
-            # Another name's problem remains: show that one.
-            self._raise(*next(iter(self._problems.values())))
-        elif not self._problems:
-            ir.async_delete_issue(self._hass, DOMAIN, self._issue_id)
-
-    def _raise(self, translation_key: str, placeholders: dict[str, str]) -> None:
-        ir.async_create_issue(
-            self._hass,
-            DOMAIN,
-            self._issue_id,
-            is_fixable=False,
-            severity=ir.IssueSeverity.ERROR,
-            translation_key=translation_key,
-            translation_placeholders={"title": self._title, **placeholders},
-        )
 
 
 class _StoredJob(TypedDict):
@@ -222,8 +159,7 @@ class EsphomeVersionCoordinator(DataUpdateCoordinator[str]):
         self,
         hass: HomeAssistant,
         entry: EsphomeGitUpdatesConfigEntry,
-        issue: ProtocolIssue,
-        reauth: Reauthentication,
+        session: DeviceBuilderSession,
     ) -> None:
         super().__init__(
             hass,
@@ -232,23 +168,11 @@ class EsphomeVersionCoordinator(DataUpdateCoordinator[str]):
             name=f"{DOMAIN} {entry.title}",
             update_interval=VERSION_POLL_INTERVAL,
         )
-        self._issue = issue
-        self._reauth = reauth
+        self._session = session
 
     async def _async_update_data(self) -> str:
-        if self._reauth.required:
-            raise UpdateFailed("waiting for new Device Builder credentials")
         try:
-            async with connect_to_device_builder(self.hass, self.config_entry.data) as client:
-                version = client.esphome_version
-        except (UnsupportedServerVersion, UnexpectedFrame) as err:
-            self._issue.report_drift("version", err)
+            async with self._session.connect("version") as client:
+                return client.esphome_version
+        except DeviceBuilderUnavailable as err:
             raise UpdateFailed(str(err)) from err
-        except AuthenticationFailed as err:
-            self._reauth.async_require(err)
-            raise UpdateFailed(f"the Device Builder refused the login: {err}") from err
-        except CONNECTION_ERRORS as err:
-            raise UpdateFailed(f"cannot reach the Device Builder: {err}") from err
-        self._issue.clear("version")
-        return version
-

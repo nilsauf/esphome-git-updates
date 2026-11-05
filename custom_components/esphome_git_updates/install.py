@@ -12,18 +12,16 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from .device_builder import (
-    CONNECTION_ERRORS,
     ActiveJob,
-    AuthenticationFailed,
+    CommandFailed,
     DeviceBuilderClient,
+    DeviceBuilderUnavailable,
     InstallObserver,
     InstallOutcome,
     InstallResult,
     JobNotFound,
     JobProgress,
     Stage,
-    UnexpectedFrame,
-    UnsupportedServerVersion,
 )
 from .install_log import (
     DEVICE_OFFLINE_TEXT,
@@ -142,23 +140,18 @@ class InstallBookkeeping(Protocol):
     ) -> None: ...
 
 
-class Reauth(Protocol):
-    """Asks the user for new credentials once the Device Builder rejects the stored ones."""
+class Session(Protocol):
+    """The entry's Device Builder session (`connection.DeviceBuilderSession`).
 
-    def async_require(self, err: AuthenticationFailed) -> None: ...
+    It holds back the Install while new credentials are awaited, and reports
+    or clears protocol drift under the Install's name: drift clears only when
+    the block exits cleanly. What it cannot get past comes out as one
+    `DeviceBuilderUnavailable`.
+    """
 
-
-class DriftIssue(Protocol):
-    """The entry's protocol-drift Repair issue, which the Install reports under its own name."""
-
-    def report_drift(
-        self, name: str, err: UnsupportedServerVersion | UnexpectedFrame
-    ) -> None: ...
-
-    def clear(self, name: str) -> None: ...
-
-
-Connect = Callable[[], AbstractAsyncContextManager[DeviceBuilderClient]]
+    def connect(
+        self, name: str, *, long_running: bool = False
+    ) -> AbstractAsyncContextManager[DeviceBuilderClient]: ...
 
 
 class _Observer:
@@ -199,16 +192,12 @@ class InstallRunner:
     def __init__(
         self,
         configuration: str,
-        connect: Connect,
+        session: Session,
         bookkeeping: InstallBookkeeping,
-        reauth: Reauth,
-        issue: DriftIssue,
     ) -> None:
         self._configuration = configuration
-        self._connect = connect
+        self._session = session
         self._bookkeeping = bookkeeping
-        self._reauth = reauth
-        self._issue = issue
 
     async def run(self, plan: InstallPlan, on_percentage: Callable[[int], None]) -> InstallEnding:
         """Run an Install: an optional Clean Build, then compile, then upload."""
@@ -256,7 +245,7 @@ class InstallRunner:
         )
         log = observer.log
         try:
-            async with self._connect() as client:
+            async with self._session.connect(DRIFT_NAME, long_running=True) as client:
                 # The first job's output names its stage; until then, it is the first.
                 log.stage = first_stage
                 result = await start(client, observer)
@@ -267,16 +256,8 @@ class InstallRunner:
                 await self._bookkeeping.async_clear_active_install()
                 return OutcomeUnknown()
             return await self._failed(log, log.stage, str(err))
-        except AuthenticationFailed as err:
-            self._reauth.async_require(err)
+        except (DeviceBuilderUnavailable, CommandFailed) as err:
             return await self._failed(log, log.stage, str(err))
-        except (UnsupportedServerVersion, UnexpectedFrame) as err:
-            self._issue.report_drift(DRIFT_NAME, err)
-            return await self._failed(log, log.stage, str(err))
-        except CONNECTION_ERRORS as err:
-            return await self._failed(log, log.stage, str(err))
-        # It reached the Device Builder without drift.
-        self._issue.clear(DRIFT_NAME)
         if result.outcome is InstallOutcome.DEFERRED:
             await self._bookkeeping.async_clear_active_install()
             return DeviceOffline()

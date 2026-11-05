@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Any
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
@@ -11,12 +10,11 @@ from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState, Config
 from homeassistant.const import STATE_OFF, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.exceptions import HomeAssistantError
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.esphome_git_updates.const import DOMAIN
 from fake_device_builder import FakeDeviceBuilder, Transcript, serve, server_info
-from tracked_config import CONFIGURATION, ENTITY_ID, OTA, press_install, set_up, tick
+from tracked_config import CONFIGURATION, ENTITY_ID, OTA, set_up, tick
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -95,24 +93,18 @@ async def _assert_polling_paused(
     assert fake.connections == attempts
 
 
-async def test_a_rejected_login_while_polling_starts_reauth(
-    hass: HomeAssistant, reauth_started: ReauthStarted
+async def test_a_rejected_login_while_polling_starts_reauth_and_pauses_polling(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    reauth_started: ReauthStarted,
 ) -> None:
-    entry, _, _ = reauth_started
+    """End to end through Home Assistant; the session's own rules are in test_connection.py."""
+    entry, fake, _ = reauth_started
 
     flow = _reauth_flow(hass)
     assert flow["step_id"] == "reauth_confirm"
     assert flow["context"]["entry_id"] == entry.entry_id
     assert hass.states.get(ENTITY_ID).state == STATE_UNAVAILABLE  # type: ignore[union-attr]
-
-
-async def test_polling_does_not_login_again_while_reauth_is_open(
-    hass: HomeAssistant,
-    freezer: FrozenDateTimeFactory,
-    reauth_started: ReauthStarted,
-) -> None:
-    _, fake, _ = reauth_started
-
     await _assert_polling_paused(hass, fake, freezer)
 
 
@@ -167,27 +159,3 @@ async def test_successful_reauth_saves_the_credentials_reloads_and_recovers_the_
     attempts = fake.connections
     await tick(hass, freezer, 5.1)
     assert fake.connections > attempts
-
-
-async def test_a_rejected_login_while_installing_starts_reauth(
-    hass: HomeAssistant,
-    freezer: FrozenDateTimeFactory,
-    hass_storage: dict[str, Any],
-) -> None:
-    async with serve(_login(), FILES) as (_, fake):
-        hass_storage[f"{DOMAIN}.tracked"] = {
-            "version": 1,
-            "key": f"{DOMAIN}.tracked",
-            "data": {"installed_esphome_version": "2026.10.0"},
-        }
-        await set_up(hass, fake, username="admin", password="secret")
-        # The pre-install check reads the YAML with the old credentials; the
-        # Install's own connection is then refused.
-        fake.transcripts = [_login(), _login(accepted=False)]
-
-        with pytest.raises(HomeAssistantError, match="login refused"):
-            await press_install(hass)
-
-        flow = _reauth_flow(hass)
-        assert flow["step_id"] == "reauth_confirm"
-        await _assert_polling_paused(hass, fake, freezer)

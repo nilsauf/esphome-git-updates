@@ -20,7 +20,6 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_device_registry_updated_event
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .connection import connect_to_device_builder
 from .const import CONF_CONFIGURATION, DOMAIN
 from .coordinator import (
     EsphomeGitUpdatesConfigEntry,
@@ -72,10 +71,8 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         self._linked: LinkedDevice | None = entry.runtime_data.linked_device
         self._runner = InstallRunner(
             entry.data[CONF_CONFIGURATION],
-            lambda: connect_to_device_builder(self.hass, entry.data, long_running=True),
+            entry.runtime_data.session,
             self._store,
-            entry.runtime_data.reauth,
-            entry.runtime_data.issue,
         )
         # Whether the unknown Installed ESPHome Version has been warned about.
         self._warned_unknown = False
