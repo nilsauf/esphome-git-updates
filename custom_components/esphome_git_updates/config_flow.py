@@ -32,9 +32,10 @@ from homeassistant.helpers.selector import (
 )
 from homeassistant.util import slugify
 
-from .connection import CONNECTION_ERRORS, connect_to_device_builder
+from .connection import connect_to_device_builder
 from .const import CONF_CONFIGURATION, DOMAIN, LINKED_DEVICE_DOMAINS
 from .device_builder import (
+    CONNECTION_ERRORS,
     AuthenticationFailed,
     Configuration,
     UnsupportedServerVersion,

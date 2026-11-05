@@ -180,7 +180,7 @@ async def test_get_job_runs_while_a_follow_job_stream_is_open() -> None:
         fake.progress = {"c1": [42]}
         async with aiohttp.ClientSession() as session:
             async with device_builder.connect(session, url) as client:
-                following = asyncio.create_task(client.follow_job("c1", "compile"))
+                following = asyncio.create_task(client.follow_job("c1", device_builder.Stage.COMPILE))
                 await fake.running.wait()
                 assert await client.get_job_progress("c1") == 42
                 following.cancel()
@@ -205,7 +205,7 @@ async def test_progress_is_polled_while_a_job_runs(monkeypatch: pytest.MonkeyPat
         async with aiohttp.ClientSession() as session:
             async with device_builder.connect(session, url) as client:
                 following = asyncio.create_task(
-                    client.follow_job("c1", "compile", on_progress=on_progress)
+                    client.follow_job("c1", device_builder.Stage.COMPILE, on_progress=on_progress)
                 )
                 await asyncio.wait_for(polled.wait(), 1)
                 following.cancel()
@@ -231,7 +231,7 @@ async def test_a_progress_callback_that_raises_never_fails_the_follow(raising: s
         fake.progress = {"c1": [42]}
         async with aiohttp.ClientSession() as session:
             async with device_builder.connect(session, url) as client:
-                job = await client.follow_job("c1", "compile", on_progress=on_progress)
+                job = await client.follow_job("c1", device_builder.Stage.COMPILE, on_progress=on_progress)
 
     assert job.succeeded
     # Both updates were attempted, whichever one raised.
@@ -252,7 +252,7 @@ async def test_a_failed_job_does_not_fill_its_progress_band() -> None:
         fake.progress = {"c1": [99]}
         async with aiohttp.ClientSession() as session:
             async with device_builder.connect(session, url) as client:
-                job = await client.follow_job("c1", "compile", on_progress=on_progress)
+                job = await client.follow_job("c1", device_builder.Stage.COMPILE, on_progress=on_progress)
 
     assert not job.succeeded
     # The failed job ends without the update that would fill its band.
@@ -363,21 +363,40 @@ async def test_a_recorder_captures_a_transcript_the_fake_server_can_replay() -> 
     assert recorded == transcript
 
 
-async def _install(fixture: str | Transcript, **kwargs: object) -> tuple[device_builder.InstallResult, list[tuple[str, str]], FakeDeviceBuilder]:
+class _Recorder:
+    """An InstallObserver that keeps what it is told."""
+
+    def __init__(self) -> None:
+        self.lines: list[tuple[str, str]] = []
+        self.reported: list[tuple[device_builder.ActiveJob, ...]] = []
+
+    def output(self, stage: str, line: str) -> None:
+        self.lines.append((stage, line))
+
+    async def jobs(self, jobs: tuple[device_builder.ActiveJob, ...]) -> None:
+        self.reported.append(jobs)
+
+    def progress(self, update: device_builder.JobProgress) -> None:
+        pass
+
+
+async def _install(
+    fixture: str | Transcript, observer: _Recorder | None = None, **kwargs: object
+) -> tuple[device_builder.InstallResult, list[tuple[str, str]], FakeDeviceBuilder]:
     """Install against the fixture named *fixture*, or against a transcript."""
-    output: list[tuple[str, str]] = []
+    observer = observer or _Recorder()
     transcript = load_fixture(fixture) if isinstance(fixture, str) else fixture
     async with serve(transcript) as (url, fake):
         async with aiohttp.ClientSession() as session:
             async with device_builder.connect(session, url) as client:
                 result = await client.install(
                     kwargs.pop("configuration"),  # type: ignore[arg-type]
-                    on_output=lambda stage, line: output.append((stage, line)),
+                    observer=observer,
                     **kwargs,  # type: ignore[arg-type]
                 )
     assert fake.mismatches == []
     assert fake.finished
-    return result, output, fake
+    return result, observer.lines, fake
 
 
 async def test_install_on_an_offline_device_is_refused_as_deferred() -> None:
@@ -486,7 +505,7 @@ async def test_captured_follow_job_reattaches_to_a_running_job() -> None:
         async with aiohttp.ClientSession() as session:
             async with device_builder.connect(session, url) as client:
                 job = await client.follow_job(
-                    "ed1483200901", "compile", lambda stage, line: lines.append(line)
+                    "ed1483200901", device_builder.Stage.COMPILE, lambda stage, line: lines.append(line)
                 )
     assert fake.mismatches == []
     assert job.succeeded
@@ -605,55 +624,48 @@ async def test_following_a_job_the_device_builder_no_longer_knows_raises_job_not
         async with aiohttp.ClientSession() as session:
             async with device_builder.connect(session, url) as client:
                 with pytest.raises(device_builder.JobNotFound) as raised:
-                    await client.follow_job("gone", "compile")
+                    await client.follow_job("gone", device_builder.Stage.COMPILE)
     assert fake.mismatches == []
     assert raised.value.job_id == "gone"
 
 
 async def test_install_reports_the_jobs_still_to_follow_before_following_each() -> None:
-    reported: list[tuple[device_builder.ActiveJob, ...]] = []
-
-    async def on_jobs(jobs: tuple[device_builder.ActiveJob, ...]) -> None:
-        reported.append(jobs)
+    observer = _Recorder()
 
     await _install(
-        with_clean_jobs(load_fixture("install_clean_success")), configuration="host-node.yaml", port="127.0.0.1",
-        clean_build=True, on_jobs=on_jobs,
+        with_clean_jobs(load_fixture("install_clean_success")), observer,
+        configuration="host-node.yaml", port="127.0.0.1", clean_build=True,
     )
     ActiveJob = device_builder.ActiveJob
-    assert reported == [
-        (ActiveJob("98d512a9c2fd", "clean"),),
-        (ActiveJob("368f07c5f6ff", "compile"), ActiveJob("58fd489cd24d", "upload")),
-        (ActiveJob("58fd489cd24d", "upload"),),
+    assert observer.reported == [
+        (ActiveJob("98d512a9c2fd", device_builder.Stage.CLEAN),),
+        (ActiveJob("368f07c5f6ff", device_builder.Stage.COMPILE), ActiveJob("58fd489cd24d", device_builder.Stage.UPLOAD)),
+        (ActiveJob("58fd489cd24d", device_builder.Stage.UPLOAD),),
     ]
 
 
 async def _resume(
     transcript: list[dict[str, object]], jobs: tuple[device_builder.ActiveJob, ...]
 ) -> tuple[device_builder.InstallResult, list[tuple[device_builder.ActiveJob, ...]]]:
-    reported: list[tuple[device_builder.ActiveJob, ...]] = []
-
-    async def on_jobs(active: tuple[device_builder.ActiveJob, ...]) -> None:
-        reported.append(active)
-
+    observer = _Recorder()
     async with serve([server_info(), *transcript]) as (url, fake):
         async with aiohttp.ClientSession() as session:
             async with device_builder.connect(session, url) as client:
-                result = await client.resume_install("b2500.yaml", jobs, on_jobs=on_jobs)
+                result = await client.resume_install("b2500.yaml", jobs, observer=observer)
     assert fake.finished and fake.mismatches == []
-    return result, reported
+    return result, observer.reported
 
 
 async def test_resuming_an_install_follows_its_jobs_to_the_end() -> None:
     ActiveJob = device_builder.ActiveJob
     result, reported = await _resume(
         [*_follow("1", "c1", "completed"), *_follow("2", "u1", "completed")],
-        (ActiveJob("c1", "compile"), ActiveJob("u1", "upload")),
+        (ActiveJob("c1", device_builder.Stage.COMPILE), ActiveJob("u1", device_builder.Stage.UPLOAD)),
     )
     assert result.outcome is device_builder.InstallOutcome.COMPLETED
     assert [(job.job_id, job.stage) for job in result.jobs] == [("c1", "compile"), ("u1", "upload")]
     assert reported == [
-        (ActiveJob("c1", "compile"), ActiveJob("u1", "upload")), (ActiveJob("u1", "upload"),),
+        (ActiveJob("c1", device_builder.Stage.COMPILE), ActiveJob("u1", device_builder.Stage.UPLOAD)), (ActiveJob("u1", device_builder.Stage.UPLOAD),),
     ]
 
 
@@ -673,14 +685,14 @@ async def test_resuming_an_install_that_had_only_got_to_its_clean_build_goes_on_
             *_follow("4", "c1", "completed"),
             *_follow("5", "u1", "completed"),
         ],
-        (ActiveJob("k1", "clean"),),
+        (ActiveJob("k1", device_builder.Stage.CLEAN),),
     )
     assert result.outcome is device_builder.InstallOutcome.COMPLETED
     assert [job.stage for job in result.jobs] == ["clean", "compile", "upload"]
     assert reported == [
-        (ActiveJob("k1", "clean"),),
-        (ActiveJob("c1", "compile"), ActiveJob("u1", "upload")),
-        (ActiveJob("u1", "upload"),),
+        (ActiveJob("k1", device_builder.Stage.CLEAN),),
+        (ActiveJob("c1", device_builder.Stage.COMPILE), ActiveJob("u1", device_builder.Stage.UPLOAD)),
+        (ActiveJob("u1", device_builder.Stage.UPLOAD),),
     ]
 
 
@@ -693,6 +705,6 @@ async def test_a_resumed_compile_that_armed_a_queued_update_is_refused_as_deferr
                                      "args": {"configuration": "b2500.yaml"}}},
             {"dir": "in", "frame": {"message_id": "2", "result": None}},
         ],
-        (ActiveJob("c1", "compile"), ActiveJob("u1", "upload")),
+        (ActiveJob("c1", device_builder.Stage.COMPILE), ActiveJob("u1", device_builder.Stage.UPLOAD)),
     )
     assert result.outcome is device_builder.InstallOutcome.DEFERRED

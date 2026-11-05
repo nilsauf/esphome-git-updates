@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final, Mapping
 
-from .device_builder import JobProgress
+from .device_builder import JobProgress, Stage
 
 
 @dataclass(frozen=True)
@@ -17,14 +17,14 @@ class Band:
 
 
 # The fixed bands, in one place. Without a Clean Build, compile starts at 0.
-BANDS_WITH_CLEAN: Final[Mapping[str, Band]] = {
-    "clean": Band(0, 5),
-    "compile": Band(5, 90),
-    "upload": Band(90, 100),
+BANDS_WITH_CLEAN: Final[Mapping[Stage, Band]] = {
+    Stage.CLEAN: Band(0, 5),
+    Stage.COMPILE: Band(5, 90),
+    Stage.UPLOAD: Band(90, 100),
 }
-BANDS_WITHOUT_CLEAN: Final[Mapping[str, Band]] = {
-    "compile": Band(0, 90),
-    "upload": Band(90, 100),
+BANDS_WITHOUT_CLEAN: Final[Mapping[Stage, Band]] = {
+    Stage.COMPILE: Band(0, 90),
+    Stage.UPLOAD: Band(90, 100),
 }
 
 

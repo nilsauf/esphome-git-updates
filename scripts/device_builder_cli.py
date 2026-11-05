@@ -83,6 +83,19 @@ async def run(args: argparse.Namespace) -> int:
             _write_transcript(args.record, frames)
 
 
+class _PrintOutput:
+    """Prints an Install's output as it arrives."""
+
+    def output(self, stage: device_builder.Stage, line: str) -> None:
+        print(f"[{stage}] {line}", flush=True)
+
+    async def jobs(self, jobs: tuple[device_builder.ActiveJob, ...]) -> None:
+        pass
+
+    def progress(self, update: device_builder.JobProgress) -> None:
+        pass
+
+
 async def _command(client: device_builder.DeviceBuilderClient, args: argparse.Namespace) -> int:
     print(
         f"== Device Builder {client.server_version}, ESPHome {client.esphome_version}",
@@ -100,7 +113,7 @@ async def _command(client: device_builder.DeviceBuilderClient, args: argparse.Na
             args.configuration,
             port=args.port,
             clean_build=args.clean,
-            on_output=lambda stage, line: print(f"[{stage}] {line}", flush=True),
+            observer=_PrintOutput(),
         )
         for job in result.jobs:
             print(

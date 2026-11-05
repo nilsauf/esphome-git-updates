@@ -480,6 +480,24 @@ def install_transcript(
     return replay if clean is None else with_clean_jobs(replay, clean)
 
 
+def queue_install(
+    compile_id: str, upload_id: str, *, configuration: str = "host-node.yaml", port: str = "OTA"
+) -> Transcript:
+    """The Device Builder's side of an Install of *configuration* uploading to *port*,
+    up to following its jobs, which `jobs` then answers."""
+    return [
+        server_info(esphome_version="2026.10.1"),
+        {"dir": "out", "frame": {"command": "firmware/install", "message_id": "1",
+                                 "args": {"configuration": configuration, "port": port}}},
+        {"dir": "in", "frame": {"message_id": "1", "result": {
+            "job_id": compile_id, "job_type": "compile", "is_deferred_install": False}}},
+        {"dir": "out", "frame": {"command": "firmware/get_jobs", "message_id": "2",
+                                 "args": {"configuration": configuration}}},
+        {"dir": "in", "frame": {"message_id": "2", "result": [
+            {"job_id": upload_id, "job_type": "upload", "depends_on": compile_id}]}},
+    ]
+
+
 @asynccontextmanager
 async def serve(
     transcript: Transcript, files: dict[str, str] | None = None

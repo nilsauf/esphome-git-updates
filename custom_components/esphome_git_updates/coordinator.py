@@ -13,15 +13,18 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .connection import CONNECTION_ERRORS, connect_to_device_builder
+from .connection import connect_to_device_builder
 from .const import DOMAIN, VERSION_POLL_INTERVAL
 from .device_builder import (
+    CONNECTION_ERRORS,
     OTA,
     ActiveJob,
     AuthenticationFailed,
+    Stage,
     UnexpectedFrame,
     UnsupportedServerVersion,
 )
+from .install import ActiveInstall
 from .reauth import Reauthentication
 
 if TYPE_CHECKING:
@@ -42,6 +45,7 @@ class RuntimeData:
     store: TrackedConfigStore
     linked_device: LinkedDevice | None
     reauth: Reauthentication
+    issue: ProtocolIssue
 
 
 type EsphomeGitUpdatesConfigEntry = ConfigEntry[RuntimeData]
@@ -55,9 +59,9 @@ def protocol_issue_id(entry_id: str) -> str:
 class ProtocolIssue:
     """The one protocol-drift Repair issue of an entry (ADR-0002).
 
-    Several pollers talk to the Device Builder. Each reports its own problem
-    under its own name, and the issue stays until every one of them is healthy
-    again, so one poller's success does not hide another's drift.
+    Several pollers and the Install talk to the Device Builder. Each poller or
+    the Install reports under its own name, and the issue stays until every one
+    of them is healthy again, so one's success does not hide another's drift.
     """
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -66,13 +70,23 @@ class ProtocolIssue:
         self._issue_id = protocol_issue_id(entry.entry_id)
         self._problems: dict[str, tuple[str, dict[str, str]]] = {}
 
-    def report(self, poller: str, translation_key: str, placeholders: dict[str, str]) -> None:
-        self._problems[poller] = (translation_key, placeholders)
+    def report(self, name: str, translation_key: str, placeholders: dict[str, str]) -> None:
+        self._problems[name] = (translation_key, placeholders)
         self._raise(translation_key, placeholders)
 
-    def clear(self, poller: str) -> None:
-        if self._problems.pop(poller, None) is not None and self._problems:
-            # Another poller's problem remains: show that one.
+    def report_drift(self, name: str, err: UnsupportedServerVersion | UnexpectedFrame) -> None:
+        """Report, under *name*, that the Device Builder answered in a way this
+        integration does not understand."""
+        if isinstance(err, UnsupportedServerVersion):
+            self.report(
+                name, "unsupported_server_version", {"server_version": err.server_version}
+            )
+        else:
+            self.report(name, "unexpected_frame", {"error": str(err)})
+
+    def clear(self, name: str) -> None:
+        if self._problems.pop(name, None) is not None and self._problems:
+            # Another name's problem remains: show that one.
             self._raise(*next(iter(self._problems.values())))
         elif not self._problems:
             ir.async_delete_issue(self._hass, DOMAIN, self._issue_id)
@@ -112,20 +126,6 @@ class _StoredData(TypedDict, total=False):
     installed_commits: dict[str, str]
     # The Install running on the Device Builder, if any (ADR-0002).
     active_install: _StoredInstall
-
-
-@dataclass(frozen=True)
-class ActiveInstall:
-    """An Install whose jobs run on the Device Builder, enough to re-attach to it."""
-
-    jobs: tuple[ActiveJob, ...]
-    commits: Mapping[str, str]
-    # The upload address it was started with: it still uploads there if the
-    # option changes before it is re-attached.
-    port: str
-    # Whether it started with a Clean Build, so its progress bands are known
-    # even when it is re-attached after the clean step.
-    clean_build: bool = False
 
 
 class TrackedConfigStore:
@@ -177,7 +177,7 @@ class TrackedConfigStore:
         if stored is None:
             return None
         return ActiveInstall(
-            tuple(ActiveJob(job["job_id"], job["stage"]) for job in stored["jobs"]),
+            tuple(ActiveJob(job["job_id"], Stage(job["stage"])) for job in stored["jobs"]),
             stored["commits"],
             stored.get("port", OTA),
             stored.get("clean_build", False),
@@ -186,7 +186,7 @@ class TrackedConfigStore:
     async def async_set_active_install(self, active: ActiveInstall) -> None:
         """Remember the jobs an Install still has to follow, until it ends."""
         self._data["active_install"] = {
-            "jobs": [{"job_id": job.job_id, "stage": job.stage} for job in active.jobs],
+            "jobs": [{"job_id": job.job_id, "stage": str(job.stage)} for job in active.jobs],
             "commits": dict(active.commits),
             "port": active.port,
             "clean_build": active.clean_build,
@@ -242,7 +242,7 @@ class EsphomeVersionCoordinator(DataUpdateCoordinator[str]):
             async with connect_to_device_builder(self.hass, self.config_entry.data) as client:
                 version = client.esphome_version
         except (UnsupportedServerVersion, UnexpectedFrame) as err:
-            report_protocol_drift(self._issue, "version", err)
+            self._issue.report_drift("version", err)
             raise UpdateFailed(str(err)) from err
         except AuthenticationFailed as err:
             self._reauth.async_require(err)
@@ -252,11 +252,3 @@ class EsphomeVersionCoordinator(DataUpdateCoordinator[str]):
         self._issue.clear("version")
         return version
 
-
-def report_protocol_drift(
-    issue: ProtocolIssue, poller: str, err: UnsupportedServerVersion | UnexpectedFrame
-) -> None:
-    if isinstance(err, UnsupportedServerVersion):
-        issue.report(poller, "unsupported_server_version", {"server_version": err.server_version})
-    else:
-        issue.report(poller, "unexpected_frame", {"error": str(err)})

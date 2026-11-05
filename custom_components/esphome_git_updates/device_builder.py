@@ -9,12 +9,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 import aiohttp
 
@@ -29,7 +29,7 @@ MIN_SERVER_VERSION = (1, 25, 0)
 MAX_SERVER_MAJOR = 1
 
 # Called with (stage, line) for every line of job output.
-OutputCallback = Callable[[str, str], None]
+OutputCallback = Callable[["Stage", str], None]
 
 # Called with ("out", frame) for every frame sent and ("in", frame) for every
 # frame received; the CLI's --record uses it to capture test fixtures.
@@ -51,6 +51,11 @@ _VERSION = re.compile(r"(\d+)\.(\d+)\.(\d+)((?:a|b|rc)\d+)?")
 
 class DeviceBuilderError(Exception):
     """Base class for every error this client raises."""
+
+
+# Everything that means "could not talk to the Device Builder". Catch the more
+# specific DeviceBuilderError subclasses before this when they need their own handling.
+CONNECTION_ERRORS = (DeviceBuilderError, aiohttp.ClientError, OSError, TimeoutError)
 
 
 class UnexpectedFrame(DeviceBuilderError):
@@ -108,6 +113,15 @@ class Configuration:
     friendly_name: str
 
 
+class Stage(StrEnum):
+    """The kind of a firmware job, as the Device Builder names it, and so the stage
+    of an Install it runs."""
+
+    CLEAN = "clean"
+    COMPILE = "compile"
+    UPLOAD = "upload"
+
+
 class InstallOutcome(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
@@ -122,7 +136,7 @@ class JobResult:
     """The terminal state of one Device Builder firmware job."""
 
     job_id: str
-    stage: str
+    stage: Stage
     status: str
     exit_code: int | None
     error: str | None
@@ -136,8 +150,8 @@ class JobResult:
 @dataclass(frozen=True)
 class InstallResult:
     outcome: InstallOutcome
-    # The stage that decided the outcome: "clean", "compile" or "upload".
-    stage: str
+    # The stage that decided the outcome.
+    stage: Stage
     jobs: tuple[JobResult, ...]
 
     @property
@@ -156,16 +170,14 @@ class ActiveJob:
     """A queued or running job of an Install, enough to follow it again later."""
 
     job_id: str
-    # "clean", "compile" or "upload".
-    stage: str
+    stage: Stage
 
 
 @dataclass(frozen=True)
 class JobProgress:
     """The active job's own progress, for scaling onto the Install's one bar."""
 
-    # "clean", "compile" or "upload".
-    stage: str
+    stage: Stage
     # 0-100 as the Device Builder reports it, or None while the job has none.
     percent: int | None
     # Whether the job has ended, so the bar belongs at the end of its band.
@@ -181,31 +193,44 @@ PROGRESS_POLL_INTERVAL: Final = 2.0
 PROGRESS_POLL_TIMEOUT: Final = 5.0
 
 
-# Awaited with the jobs an Install still has to follow, whenever they change.
-JobsCallback = Callable[[tuple[ActiveJob, ...]], Awaitable[None]]
+class InstallObserver(Protocol):
+    """What an Install tells its caller while it runs."""
+
+    def output(self, stage: Stage, line: str) -> None:
+        """One line of a job's output."""
+
+    async def jobs(self, jobs: tuple[ActiveJob, ...]) -> None:
+        """The jobs still to follow, before each one is followed, so the
+        Install can be resumed with `resume_install` once the connection is gone."""
+
+    def progress(self, update: JobProgress) -> None:
+        """The followed job's own progress, and once more when it succeeds."""
+
+
+class _Unobserved:
+    def output(self, stage: Stage, line: str) -> None:
+        pass
+
+    async def jobs(self, jobs: tuple[ActiveJob, ...]) -> None:
+        pass
+
+    def progress(self, update: JobProgress) -> None:
+        pass
 
 
 class _InstallRun:
     """The state of one Install while its jobs are followed."""
 
-    def __init__(
-        self,
-        configuration: str,
-        port: str,
-        on_output: OutputCallback | None,
-        on_jobs: JobsCallback | None,
-        on_progress: ProgressCallback | None = None,
-    ) -> None:
+    def __init__(self, configuration: str, port: str, observer: InstallObserver | None) -> None:
         self.configuration = configuration
         self.port = port
-        self.output: OutputCallback = on_output or (lambda stage, line: None)
-        self.progress = on_progress
-        self._on_jobs = on_jobs
+        self.observer: InstallObserver = observer or _Unobserved()
         self.results: list[JobResult] = []
 
-    async def report(self, jobs: tuple[ActiveJob, ...]) -> None:
-        if self._on_jobs is not None:
-            await self._on_jobs(jobs)
+    async def follow(self, client: DeviceBuilderClient, job: ActiveJob) -> JobResult:
+        return await client.follow_job(
+            job.job_id, job.stage, self.observer.output, self.observer.progress
+        )
 
     def done(self, outcome: InstallOutcome) -> InstallResult:
         return InstallResult(outcome, self.results[-1].stage, tuple(self.results))
@@ -309,9 +334,7 @@ class DeviceBuilderClient:
         *,
         port: str = OTA,
         clean_build: bool = False,
-        on_output: OutputCallback | None = None,
-        on_jobs: JobsCallback | None = None,
-        on_progress: ProgressCallback | None = None,
+        observer: InstallObserver | None = None,
     ) -> InstallResult:
         """Run one Install: an optional Clean Build, then compile, then upload.
 
@@ -324,12 +347,10 @@ class DeviceBuilderClient:
         cancelled, and a queued update armed by a job that finished while
         the device was offline is cleared.
 
-        *on_jobs* is awaited with the jobs still to follow before each one is
-        followed, so the Install can be resumed with `resume_install` after
-        the connection is gone. *on_progress* gets each job's own progress
-        while it is followed.
+        *observer* gets the output, the jobs still to follow and each job's
+        own progress while it runs.
         """
-        run = _InstallRun(configuration, port, on_output, on_jobs, on_progress)
+        run = _InstallRun(configuration, port, observer)
         if clean_build:
             clean = await self._command("firmware/clean", configuration=configuration)
             return await self._follow(run, await self._clean_jobs(configuration, clean))
@@ -354,15 +375,15 @@ class DeviceBuilderClient:
         try:
             since = datetime.fromisoformat(local["created_at"])
             remote = tuple(
-                ActiveJob(_job_id(job), "clean")
+                ActiveJob(_job_id(job), Stage.CLEAN)
                 for job in jobs
-                if job["job_type"] == "clean"
+                if job["job_type"] == Stage.CLEAN
                 and job["job_id"] != local_id
                 and datetime.fromisoformat(job["created_at"]) >= since
             )
         except (KeyError, TypeError, ValueError) as err:
             raise UnexpectedFrame("malformed clean job", jobs) from err
-        return (ActiveJob(local_id, "clean"), *remote)
+        return (ActiveJob(local_id, Stage.CLEAN), *remote)
 
     async def resume_install(
         self,
@@ -370,9 +391,7 @@ class DeviceBuilderClient:
         jobs: tuple[ActiveJob, ...],
         *,
         port: str = OTA,
-        on_output: OutputCallback | None = None,
-        on_jobs: JobsCallback | None = None,
-        on_progress: ProgressCallback | None = None,
+        observer: InstallObserver | None = None,
     ) -> InstallResult:
         """Finish an Install started on an earlier connection.
 
@@ -382,7 +401,7 @@ class DeviceBuilderClient:
         Builder no longer knows a job.
         """
         return await self._follow(
-            _InstallRun(configuration, port, on_output, on_jobs, on_progress), jobs
+            _InstallRun(configuration, port, observer), jobs
         )
 
     async def _compile_and_upload(self, run: _InstallRun) -> InstallResult:
@@ -392,13 +411,11 @@ class DeviceBuilderClient:
         compile_id = _job_id(compile_job)
         if compile_job.get("is_deferred_install"):
             await self._refuse_deferred_compile(run.configuration, compile_id)
-            run.results.append(
-                await self.follow_job(compile_id, "compile", run.output, run.progress)
-            )
+            run.results.append(await run.follow(self, ActiveJob(compile_id, Stage.COMPILE)))
             return run.done(InstallOutcome.DEFERRED)
         upload_id = await self._dependent_upload(run.configuration, compile_id)
         return await self._follow(
-            run, (ActiveJob(compile_id, "compile"), ActiveJob(upload_id, "upload"))
+            run, (ActiveJob(compile_id, Stage.COMPILE), ActiveJob(upload_id, Stage.UPLOAD))
         )
 
     async def _follow(
@@ -406,10 +423,8 @@ class DeviceBuilderClient:
     ) -> InstallResult:
         """Follow *jobs* in order, then go on to compile if they were a Clean Build."""
         for index, job in enumerate(jobs):
-            await run.report(jobs[index:])
-            run.results.append(
-                await self.follow_job(job.job_id, job.stage, run.output, run.progress)
-            )
+            await run.observer.jobs(jobs[index:])
+            run.results.append(await run.follow(self, job))
             if run.results[-1].queued_update_armed:
                 await self._command(
                     "firmware/clear_queued_update", configuration=run.configuration
@@ -417,14 +432,14 @@ class DeviceBuilderClient:
                 return run.done(InstallOutcome.DEFERRED)
             if not run.results[-1].succeeded:
                 return run.done(InstallOutcome.FAILED)
-        if jobs and jobs[-1].stage == "clean":
+        if jobs and jobs[-1].stage == Stage.CLEAN:
             return await self._compile_and_upload(run)
         return run.done(InstallOutcome.COMPLETED)
 
     async def follow_job(
         self,
         job_id: str,
-        stage: str,
+        stage: Stage,
         on_output: OutputCallback | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> JobResult:
@@ -501,14 +516,14 @@ class DeviceBuilderClient:
         return job
 
     async def _poll_progress_loop(
-        self, job_id: str, stage: str, on_progress: ProgressCallback
+        self, job_id: str, stage: Stage, on_progress: ProgressCallback
     ) -> None:
         while True:
             await asyncio.sleep(PROGRESS_POLL_INTERVAL)
             await self._poll_progress(job_id, stage, on_progress)
 
     async def _poll_progress(
-        self, job_id: str, stage: str, on_progress: ProgressCallback
+        self, job_id: str, stage: Stage, on_progress: ProgressCallback
     ) -> None:
         """Poll once; a failure only means the bar does not move (ticket 14)."""
         try:
@@ -553,7 +568,7 @@ class DeviceBuilderClient:
                 if (
                     isinstance(job, dict)
                     and job.get("depends_on") == compile_id
-                    and job.get("job_type") == "upload"
+                    and job.get("job_type") == Stage.UPLOAD
                 ):
                     return _job_id(job)
         raise UnexpectedFrame(f"no upload job depends on compile job {compile_id}", jobs)

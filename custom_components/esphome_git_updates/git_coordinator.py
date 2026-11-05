@@ -11,15 +11,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .connection import CONNECTION_ERRORS, connect_to_device_builder
+from .connection import connect_to_device_builder
 from .const import CONF_CONFIGURATION, DOMAIN
 from .coordinator import (
     EsphomeGitUpdatesConfigEntry,
     ProtocolIssue,
     TrackedConfigStore,
-    report_protocol_drift,
 )
 from .device_builder import (
+    CONNECTION_ERRORS,
     AuthenticationFailed,
     CommandFailed,
     DeviceBuilderClient,
@@ -206,7 +206,7 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
             self._issue.report(_POLLER, "include_refused", {"file": err.path, "error": err.details})
             raise UpdateFailed(f"the Device Builder refused to read {err}") from err
         except (UnsupportedServerVersion, UnexpectedFrame) as err:
-            report_protocol_drift(self._issue, _POLLER, err)
+            self._issue.report_drift(_POLLER, err)
             raise UpdateFailed(str(err)) from err
         except CommandFailed as err:
             raise UpdateFailed(f"cannot read {configuration}: {err}") from err

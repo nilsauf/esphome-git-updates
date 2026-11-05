@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import re
 from collections import deque
+from collections.abc import Iterable
+from typing import Final, Literal
+
+from .device_builder import Stage
 
 # How many lines of output a failure notification shows.
 LOG_TAIL_LINES = 30
@@ -57,29 +61,36 @@ def _strip_ansi(line: str) -> str:
     return _ANSI.sub("", line).rstrip()
 
 
+# The stage of an Install that has not reached its first job: connecting and logging in.
+CONNECT: Final = "connect"
+
+# Where an Install is: before its first job, or at a job's stage.
+InstallStage = Stage | Literal["connect"]
+
+
 class InstallLog:
     """Collects an Install's output lines, as `DeviceBuilderClient.install` reports them."""
 
     def __init__(self) -> None:
         # The stage the Install has reached, for a failure that is not a job's
         # result, such as a lost connection.
-        self.stage = "connect"
+        self.stage: InstallStage = CONNECT
         self.tail: deque[str] = deque(maxlen=LOG_TAIL_LINES)
         # The distinct warnings, in the order they first appeared.
         self.warnings: dict[str, None] = {}
         # Whether the upload said it could not reach the device.
         self.device_unreachable = False
 
-    def __call__(self, stage: str, line: str) -> None:
+    def __call__(self, stage: Stage, line: str) -> None:
         self.stage = stage
         line = _strip_ansi(line)
         self.tail.append(line)
         if line.startswith(_WARNING_PREFIX) and not line.startswith(_ROUTINE_WARNINGS):
             self.warnings[line] = None
-        if stage == "upload" and _UNREACHABLE.search(line):
+        if stage == Stage.UPLOAD and _UNREACHABLE.search(line):
             self.device_unreachable = True
 
-    def failure_text(self, stage: str, error: str) -> str:
+    def failure_text(self, stage: InstallStage, error: str) -> str:
         tail = "\n".join(self.tail)
         return (
             f"Install failed at stage **{stage}**: {error}\n\n"
@@ -88,5 +99,10 @@ class InstallLog:
         )
 
     def warnings_text(self) -> str:
-        warnings = "\n".join(self.warnings)
-        return f"The Install succeeded, but ESPHome warned:\n\n```text\n{warnings}\n```"
+        return warnings_text(self.warnings)
+
+
+def warnings_text(warnings: Iterable[str]) -> str:
+    """The message of a successful Install's notification about ESPHome's *warnings*."""
+    lines = "\n".join(warnings)
+    return f"The Install succeeded, but ESPHome warned:\n\n```text\n{lines}\n```"
