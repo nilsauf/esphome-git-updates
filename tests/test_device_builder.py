@@ -13,29 +13,30 @@ from fake_device_builder import (
     Transcript,
     job_events,
     load_fixture,
-    server_info,
     serve,
+    server_info,
     with_clean_jobs,
 )
 
 
 async def test_connect_reads_server_info() -> None:
-    async with serve([server_info("1.26.0", "2026.10.1")]) as (url, _):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                assert client.server_version == "1.26.0"
-                assert client.esphome_version == "2026.10.1"
+    async with (
+        serve([server_info("1.26.0", "2026.10.1")]) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        assert client.server_version == "1.26.0"
+        assert client.esphome_version == "2026.10.1"
 
 
 @pytest.mark.parametrize(
     "version", ["0.1.0b118", "1.24.0", "1.25.0b1", "1.26.0-junk", "2.0.0", "garbage"]
 )
 async def test_connect_rejects_unsupported_server_version(version: str) -> None:
-    async with serve([server_info(version)]) as (url, _):
-        async with aiohttp.ClientSession() as session:
-            with pytest.raises(device_builder.UnsupportedServerVersion) as err:
-                async with device_builder.connect(session, url):
-                    pass
+    async with serve([server_info(version)]) as (url, _), aiohttp.ClientSession() as session:
+        with pytest.raises(device_builder.UnsupportedServerVersion) as err:
+            async with device_builder.connect(session, url):
+                pass
     assert err.value.server_version == version
 
 
@@ -43,26 +44,29 @@ async def test_connect_rejects_unsupported_server_version(version: str) -> None:
     "version", ["1.25.0", "1.25.1b1", "1.26.0", "1.26.1b5", "1.26.1rc2", "1.40.2"]
 )
 async def test_connect_accepts_supported_server_version(version: str) -> None:
-    async with serve([server_info(version)]) as (url, _):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                assert client.server_version == version
+    async with (
+        serve([server_info(version)]) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        assert client.server_version == version
 
 
 async def test_connect_rejects_a_handshake_that_is_not_server_info() -> None:
-    async with serve([{"dir": "in", "frame": {"hello": "world"}}]) as (url, _):
-        async with aiohttp.ClientSession() as session:
-            with pytest.raises(device_builder.UnexpectedFrame):
-                async with device_builder.connect(session, url):
-                    pass
+    async with (
+        serve([{"dir": "in", "frame": {"hello": "world"}}]) as (url, _),
+        aiohttp.ClientSession() as session,
+    ):
+        with pytest.raises(device_builder.UnexpectedFrame):
+            async with device_builder.connect(session, url):
+                pass
 
 
 async def test_a_connection_dropped_before_the_handshake_is_a_lost_connection() -> None:
-    async with serve([{"dir": "close"}]) as (url, _):
-        async with aiohttp.ClientSession() as session:
-            with pytest.raises(device_builder.ConnectionLost):
-                async with device_builder.connect(session, url):
-                    pass
+    async with serve([{"dir": "close"}]) as (url, _), aiohttp.ClientSession() as session:
+        with pytest.raises(device_builder.ConnectionLost):
+            async with device_builder.connect(session, url):
+                pass
 
 
 def _device(configuration: str, name: str, friendly_name: str) -> dict[str, object]:
@@ -80,10 +84,12 @@ async def test_list_configurations_returns_configured_devices() -> None:
             "importable": [{"name": "stray"}],
         }}},
     ]
-    async with serve(transcript) as (url, fake):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                configurations = await client.list_configurations()
+    async with (
+        serve(transcript) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        configurations = await client.list_configurations()
     assert configurations == [
         device_builder.Configuration("b2500.yaml", "b2500", "Marstek B2500"),
         device_builder.Configuration("kitchen.yaml", "kitchen", "Kitchen"),
@@ -98,10 +104,12 @@ async def test_get_config_returns_raw_yaml() -> None:
                                  "args": {"configuration": "b2500.yaml"}}},
         {"dir": "in", "frame": {"message_id": "1", "result": "esphome:\n  name: b2500\n"}},
     ]
-    async with serve(transcript) as (url, _):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                assert await client.get_config("b2500.yaml") == "esphome:\n  name: b2500\n"
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        assert await client.get_config("b2500.yaml") == "esphome:\n  name: b2500\n"
 
 
 async def test_a_command_error_raises_command_failed_with_the_server_code() -> None:
@@ -112,11 +120,13 @@ async def test_a_command_error_raises_command_failed_with_the_server_code() -> N
         {"dir": "in", "frame": {"message_id": "1", "error_code": "not_found",
                                 "details": "Device 'nope.yaml' not found"}},
     ]
-    async with serve(transcript) as (url, _):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                with pytest.raises(device_builder.CommandFailed) as err:
-                    await client.get_config("nope.yaml")
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.CommandFailed) as err:
+            await client.get_config("nope.yaml")
     assert err.value.error_code == "not_found"
     assert err.value.details == "Device 'nope.yaml' not found"
 
@@ -127,11 +137,13 @@ async def test_a_frame_for_another_message_raises_unexpected_frame() -> None:
         {"dir": "out", "frame": {"command": "devices/list", "message_id": "1", "args": {}}},
         {"dir": "in", "frame": {"message_id": "99", "result": {}}},
     ]
-    async with serve(transcript) as (url, _):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                with pytest.raises(device_builder.UnexpectedFrame):
-                    await client.list_configurations()
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.UnexpectedFrame):
+            await client.list_configurations()
 
 
 async def test_get_job_progress_returns_the_jobs_own_progress() -> None:
@@ -142,10 +154,12 @@ async def test_get_job_progress_returns_the_jobs_own_progress() -> None:
         {"dir": "in", "frame": {"message_id": "1", "result": {
             "job_id": "c1", "status": "running", "progress": 42}}},
     ]
-    async with serve(transcript) as (url, fake):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                assert await client.get_job_progress("c1") == 42
+    async with (
+        serve(transcript) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        assert await client.get_job_progress("c1") == 42
     assert fake.mismatches == []
 
 
@@ -166,11 +180,13 @@ async def test_a_malformed_get_job_result_raises_unexpected_frame(
                                  "args": {"job_id": "c1"}}},
         {"dir": "in", "frame": {"message_id": "1", "result": result}},
     ]
-    async with serve(transcript) as (url, _):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                with pytest.raises(device_builder.UnexpectedFrame):
-                    await client.get_job_progress("c1")
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.UnexpectedFrame):
+            await client.get_job_progress("c1")
 
 
 async def test_get_job_runs_while_a_follow_job_stream_is_open() -> None:
@@ -178,14 +194,16 @@ async def test_get_job_runs_while_a_follow_job_stream_is_open() -> None:
     async with serve([server_info()]) as (url, fake):
         fake.jobs = {"c1": job_events("[10/100] Compiling", status=None)}
         fake.progress = {"c1": [42]}
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                following = asyncio.create_task(client.follow_job("c1", device_builder.Stage.COMPILE))
-                await fake.running.wait()
-                assert await client.get_job_progress("c1") == 42
-                following.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await following
+        async with (
+            aiohttp.ClientSession() as session,
+            device_builder.connect(session, url) as client,
+        ):
+            following = asyncio.create_task(client.follow_job("c1", device_builder.Stage.COMPILE))
+            await fake.running.wait()
+            assert await client.get_job_progress("c1") == 42
+            following.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await following
     assert fake.mismatches == []
 
 
@@ -202,15 +220,17 @@ async def test_progress_is_polled_while_a_job_runs(monkeypatch: pytest.MonkeyPat
     async with serve([server_info()]) as (url, fake):
         fake.jobs = {"c1": job_events("[10/100] Compiling", status=None)}
         fake.progress = {"c1": [10, 50, 99]}
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                following = asyncio.create_task(
-                    client.follow_job("c1", device_builder.Stage.COMPILE, on_progress=on_progress)
-                )
-                await asyncio.wait_for(polled.wait(), 1)
-                following.cancel()
-                with pytest.raises(asyncio.CancelledError):
-                    await following
+        async with (
+            aiohttp.ClientSession() as session,
+            device_builder.connect(session, url) as client,
+        ):
+            following = asyncio.create_task(
+                client.follow_job("c1", device_builder.Stage.COMPILE, on_progress=on_progress)
+            )
+            await asyncio.wait_for(polled.wait(), 1)
+            following.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await following
 
     assert [update.percent for update in progress if not update.finished] == [10, 50, 99]
     assert fake.mismatches == []
@@ -229,9 +249,11 @@ async def test_a_progress_callback_that_raises_never_fails_the_follow(raising: s
     async with serve([server_info()]) as (url, fake):
         fake.jobs = {"c1": job_events("[10/100] Compiling")}
         fake.progress = {"c1": [42]}
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                job = await client.follow_job("c1", device_builder.Stage.COMPILE, on_progress=on_progress)
+        async with (
+            aiohttp.ClientSession() as session,
+            device_builder.connect(session, url) as client,
+        ):
+            job = await client.follow_job("c1", device_builder.Stage.COMPILE, on_progress=on_progress)
 
     assert job.succeeded
     # Both updates were attempted, whichever one raised.
@@ -250,9 +272,11 @@ async def test_a_failed_job_does_not_fill_its_progress_band() -> None:
     async with serve([server_info()]) as (url, fake):
         fake.jobs = {"c1": job_events("[99/100] Compiling", status="failed")}
         fake.progress = {"c1": [99]}
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                job = await client.follow_job("c1", device_builder.Stage.COMPILE, on_progress=on_progress)
+        async with (
+            aiohttp.ClientSession() as session,
+            device_builder.connect(session, url) as client,
+        ):
+            job = await client.follow_job("c1", device_builder.Stage.COMPILE, on_progress=on_progress)
 
     assert not job.succeeded
     # The failed job ends without the update that would fill its band.
@@ -267,11 +291,13 @@ async def test_a_malformed_result_raises_unexpected_frame() -> None:
         {"dir": "out", "frame": {"command": "devices/list", "message_id": "1", "args": {}}},
         {"dir": "in", "frame": {"message_id": "1", "result": {"devices": []}}},
     ]
-    async with serve(transcript) as (url, _):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                with pytest.raises(device_builder.UnexpectedFrame):
-                    await client.list_configurations()
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.UnexpectedFrame):
+            await client.list_configurations()
 
 
 async def test_a_dropped_connection_raises_connection_lost() -> None:
@@ -280,11 +306,13 @@ async def test_a_dropped_connection_raises_connection_lost() -> None:
         {"dir": "out", "frame": {"command": "devices/list", "message_id": "1", "args": {}}},
         {"dir": "close"},
     ]
-    async with serve(transcript) as (url, _):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                with pytest.raises(device_builder.ConnectionLost):
-                    await client.list_configurations()
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.ConnectionLost):
+            await client.list_configurations()
 
 
 def _login(username: str, password: str) -> dict[str, object]:
@@ -300,12 +328,14 @@ async def test_connect_logs_in_when_the_server_requires_auth() -> None:
         {"dir": "out", "frame": {"command": "devices/list", "message_id": "2", "args": {}}},
         {"dir": "in", "frame": {"message_id": "2", "result": {"configured": [], "importable": []}}},
     ]
-    async with serve(transcript) as (url, fake):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(
+    async with (
+        serve(transcript) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(
                 session, url, username="admin", password="secret"
-            ) as client:
-                assert await client.list_configurations() == []
+        ) as client,
+    ):
+        assert await client.list_configurations() == []
     assert fake.mismatches == []
 
 
@@ -315,12 +345,14 @@ async def test_connect_skips_login_when_the_server_does_not_require_auth() -> No
         {"dir": "out", "frame": {"command": "devices/list", "message_id": "1", "args": {}}},
         {"dir": "in", "frame": {"message_id": "1", "result": {"configured": [], "importable": []}}},
     ]
-    async with serve(transcript) as (url, fake):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(
+    async with (
+        serve(transcript) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(
                 session, url, username="admin", password="secret"
-            ) as client:
-                await client.list_configurations()
+        ) as client,
+    ):
+        await client.list_configurations()
     assert fake.mismatches == []
 
 
@@ -331,19 +363,20 @@ async def test_rejected_credentials_raise_authentication_failed() -> None:
         {"dir": "in", "frame": {"message_id": "1", "error_code": "not_authenticated",
                                 "details": "Invalid credentials"}},
     ]
-    async with serve(transcript) as (url, _):
-        async with aiohttp.ClientSession() as session:
-            with pytest.raises(device_builder.AuthenticationFailed, match="Invalid credentials"):
-                async with device_builder.connect(session, url, username="admin", password="wrong"):
-                    pass
+    async with serve(transcript) as (url, _), aiohttp.ClientSession() as session:
+        with pytest.raises(device_builder.AuthenticationFailed, match="Invalid credentials"):
+            async with device_builder.connect(session, url, username="admin", password="wrong"):
+                pass
 
 
 async def test_missing_credentials_raise_authentication_failed() -> None:
-    async with serve([server_info(requires_auth=True)]) as (url, _):
-        async with aiohttp.ClientSession() as session:
-            with pytest.raises(device_builder.AuthenticationFailed, match="requires a username"):
-                async with device_builder.connect(session, url):
-                    pass
+    async with (
+        serve([server_info(requires_auth=True)]) as (url, _),
+        aiohttp.ClientSession() as session,
+    ):
+        with pytest.raises(device_builder.AuthenticationFailed, match="requires a username"):
+            async with device_builder.connect(session, url):
+                pass
 
 
 async def test_a_recorder_captures_a_transcript_the_fake_server_can_replay() -> None:
@@ -354,12 +387,14 @@ async def test_a_recorder_captures_a_transcript_the_fake_server_can_replay() -> 
         {"dir": "in", "frame": {"message_id": "1", "result": "esphome:\n  name: b2500\n"}},
     ]
     recorded: list[dict[str, object]] = []
-    async with serve(transcript) as (url, _):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(
                 session, url, recorder=lambda d, f: recorded.append({"dir": d, "frame": f})
-            ) as client:
-                await client.get_config("b2500.yaml")
+        ) as client,
+    ):
+        await client.get_config("b2500.yaml")
     assert recorded == transcript
 
 
@@ -386,14 +421,16 @@ async def _install(
     """Install against the fixture named *fixture*, or against a transcript."""
     observer = observer or _Recorder()
     transcript = load_fixture(fixture) if isinstance(fixture, str) else fixture
-    async with serve(transcript) as (url, fake):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                result = await client.install(
-                    kwargs.pop("configuration"),  # type: ignore[arg-type]
-                    observer=observer,
-                    **kwargs,  # type: ignore[arg-type]
-                )
+    async with (
+        serve(transcript) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        result = await client.install(
+            kwargs.pop("configuration"),  # type: ignore[arg-type]
+            observer=observer,
+            **kwargs,  # type: ignore[arg-type]
+        )
     assert fake.mismatches == []
     assert fake.finished
     return result, observer.lines, fake
@@ -429,10 +466,12 @@ async def test_a_deferred_compile_that_finished_before_the_cancel_is_still_disar
             "status": "completed", "exit_code": 0, "error": None, "queued_update_armed": True}}},
         {"dir": "in", "frame": {"message_id": "4", "result": None}},
     ]
-    async with serve(transcript) as (url, fake):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                result = await client.install("b2500.yaml")
+    async with (
+        serve(transcript) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        result = await client.install("b2500.yaml")
     assert fake.finished and fake.mismatches == []
     assert result.outcome is device_builder.InstallOutcome.DEFERRED
 
@@ -441,10 +480,12 @@ async def test_a_deferred_compile_that_finished_before_the_cancel_is_still_disar
 
 
 async def test_captured_list() -> None:
-    async with serve(load_fixture("list")) as (url, fake):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                configurations = await client.list_configurations()
+    async with (
+        serve(load_fixture("list")) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        configurations = await client.list_configurations()
     assert [c.configuration for c in configurations] == [
         "broken-node.yaml", "host-node.yaml", "offline-node.yaml",
     ]
@@ -452,21 +493,25 @@ async def test_captured_list() -> None:
 
 
 async def test_captured_login_with_a_password() -> None:
-    async with serve(load_fixture("auth_login_list")) as (url, fake):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(
+    async with (
+        serve(load_fixture("auth_login_list")) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(
                 session, url, username="admin", password="spike-password"
-            ) as client:
-                assert [c.name for c in await client.list_configurations()] == ["host-node"]
+        ) as client,
+    ):
+        assert [c.name for c in await client.list_configurations()] == ["host-node"]
     assert fake.mismatches == []
 
 
 async def test_captured_login_with_a_wrong_password() -> None:
-    async with serve(load_fixture("auth_login_rejected")) as (url, _):
-        async with aiohttp.ClientSession() as session:
-            with pytest.raises(device_builder.AuthenticationFailed, match="Invalid credentials"):
-                async with device_builder.connect(session, url, username="admin", password="x"):
-                    pass
+    async with (
+        serve(load_fixture("auth_login_rejected")) as (url, _),
+        aiohttp.ClientSession() as session,
+    ):
+        with pytest.raises(device_builder.AuthenticationFailed, match="Invalid credentials"):
+            async with device_builder.connect(session, url, username="admin", password="x"):
+                pass
 
 
 async def test_captured_successful_clean_install() -> None:
@@ -501,12 +546,14 @@ async def test_captured_failed_upload() -> None:
 
 async def test_captured_follow_job_reattaches_to_a_running_job() -> None:
     lines: list[str] = []
-    async with serve(load_fixture("follow_job_reattach")) as (url, fake):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                job = await client.follow_job(
-                    "ed1483200901", device_builder.Stage.COMPILE, lambda stage, line: lines.append(line)
-                )
+    async with (
+        serve(load_fixture("follow_job_reattach")) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        job = await client.follow_job(
+            "ed1483200901", device_builder.Stage.COMPILE, lambda stage, line: lines.append(line)
+        )
     assert fake.mismatches == []
     assert job.succeeded
     assert len(lines) == 56
@@ -536,10 +583,12 @@ async def test_a_compile_that_arms_a_queued_update_is_refused_as_deferred() -> N
                                  "args": {"configuration": "b2500.yaml"}}},
         {"dir": "in", "frame": {"message_id": "4", "result": None}},
     ]
-    async with serve(transcript) as (url, fake):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                result = await client.install("b2500.yaml")
+    async with (
+        serve(transcript) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        result = await client.install("b2500.yaml")
     assert fake.finished and fake.mismatches == []
     assert result.outcome is device_builder.InstallOutcome.DEFERRED
     assert result.error == "device offline"
@@ -620,11 +669,13 @@ async def test_following_a_job_the_device_builder_no_longer_knows_raises_job_not
         {"dir": "in", "frame": {"message_id": "1", "error_code": "internal_error",
                                 "details": "Command failed: firmware/follow_job"}},
     ]
-    async with serve(transcript) as (url, fake):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                with pytest.raises(device_builder.JobNotFound) as raised:
-                    await client.follow_job("gone", device_builder.Stage.COMPILE)
+    async with (
+        serve(transcript) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.JobNotFound) as raised:
+            await client.follow_job("gone", device_builder.Stage.COMPILE)
     assert fake.mismatches == []
     assert raised.value.job_id == "gone"
 
@@ -648,10 +699,12 @@ async def _resume(
     transcript: list[dict[str, object]], jobs: tuple[device_builder.ActiveJob, ...]
 ) -> tuple[device_builder.InstallResult, list[tuple[device_builder.ActiveJob, ...]]]:
     observer = _Recorder()
-    async with serve([server_info(), *transcript]) as (url, fake):
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(session, url) as client:
-                result = await client.resume_install("b2500.yaml", jobs, observer=observer)
+    async with (
+        serve([server_info(), *transcript]) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        result = await client.resume_install("b2500.yaml", jobs, observer=observer)
     assert fake.finished and fake.mismatches == []
     return result, observer.reported
 

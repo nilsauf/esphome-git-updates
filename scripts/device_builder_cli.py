@@ -30,7 +30,7 @@ import aiohttp
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "custom_components" / "esphome_git_updates"))
 
-import device_builder  # noqa: E402
+import device_builder
 
 EXIT_FAILED = 1
 EXIT_DEFERRED = 3
@@ -66,15 +66,17 @@ async def run(args: argparse.Namespace) -> int:
     url = args.url or f"http://127.0.0.1:{args.addon_port}"
     frames: list[dict[str, Any]] = []
     try:
-        async with aiohttp.ClientSession() as session:
-            async with device_builder.connect(
+        async with (
+            aiohttp.ClientSession() as session,
+            device_builder.connect(
                 session,
                 url,
                 username=args.username,
                 password=args.password,
                 recorder=lambda direction, frame: frames.append({"dir": direction, "frame": frame}),
-            ) as client:
-                return await _command(client, args)
+            ) as client,
+        ):
+            return await _command(client, args)
     except (device_builder.DeviceBuilderError, aiohttp.ClientError) as err:
         print(f"error: {err}", file=sys.stderr)
         return EXIT_FAILED

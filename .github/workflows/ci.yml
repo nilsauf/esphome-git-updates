@@ -20,7 +20,9 @@ jobs:
         run: >
           pip install
           pytest-homeassistant-custom-component==0.13.375
-          mypy types-PyYAML
+          mypy types-PyYAML ruff==0.17.4
+      - name: Lint
+        run: ruff check .
       - name: Typecheck
         run: mypy
       - name: Test

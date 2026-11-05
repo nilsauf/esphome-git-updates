@@ -70,8 +70,8 @@ async def _async_addon_ingress_port(hass: HomeAssistant, slug: str) -> int | Non
     if not is_hassio(hass):
         return None
     # Imported here: hassio is only an after_dependency, absent without Supervisor.
-    from aiohasupervisor import SupervisorError  # noqa: PLC0415
-    from homeassistant.components.hassio import get_supervisor_client  # noqa: PLC0415
+    from aiohasupervisor import SupervisorError
+    from homeassistant.components.hassio import get_supervisor_client
 
     try:
         info = await get_supervisor_client(hass).addons.addon_info(slug)

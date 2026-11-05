@@ -17,8 +17,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import issue_registry as ir
 
-from custom_components.esphome_git_updates.const import DOMAIN
 from custom_components.esphome_git_updates.connection import protocol_issue_id
+from custom_components.esphome_git_updates.const import DOMAIN
 from fake_device_builder import FakeDeviceBuilder, serve, server_info
 from git_repo import GitRepo
 from tracked_config import CONFIGURATION, ENTITY_ID, OTA, install, set_up, tick

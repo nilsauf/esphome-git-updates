@@ -18,7 +18,6 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.esphome_git_updates.const import DOMAIN
 from fake_device_builder import load_fixture, port_of, serve, server_info
 
-
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
 

@@ -8,9 +8,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
-import pytest
-
 import aiohttp
+import pytest
 
 from custom_components.esphome_git_updates import device_builder
 from custom_components.esphome_git_updates.device_builder import DeviceBuilderUnavailable
@@ -18,8 +17,8 @@ from custom_components.esphome_git_updates.install import (
     ActiveInstall,
     DeviceOffline,
     Failed,
-    InstallEnding,
     Installed,
+    InstallEnding,
     InstallPlan,
     InstallRunner,
     OutcomeUnknown,

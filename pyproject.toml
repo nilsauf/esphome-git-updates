@@ -5,13 +5,19 @@ requires-python = ">=3.13"
 dependencies = ["aiohttp>=3.9"]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "pytest-homeassistant-custom-component", "mypy", "types-PyYAML"]
+dev = ["pytest", "pytest-asyncio", "pytest-homeassistant-custom-component", "mypy", "types-PyYAML", "ruff==0.17.4"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 pythonpath = [".", "custom_components/esphome_git_updates", "scripts", "tests"]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+# The integration, the CLI and the test helpers are imported as top-level
+# modules too (see pytest's pythonpath), so ruff must know them as first-party.
+src = [".", "custom_components/esphome_git_updates", "scripts", "tests"]
 
 [tool.mypy]
 # `device_builder.py` has two module names: the integration imports it as part

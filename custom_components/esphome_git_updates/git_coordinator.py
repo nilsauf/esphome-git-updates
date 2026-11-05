@@ -11,11 +11,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
+from .comparisons import GitHubComparisons, SourceChange
 from .connection import DeviceBuilderSession, DeviceBuilderUnavailable, ProtocolProblem
 from .const import CONF_CONFIGURATION, DOMAIN
 from .coordinator import EsphomeGitUpdatesConfigEntry, TrackedConfigStore
 from .device_builder import CommandFailed, DeviceBuilderClient
-from .comparisons import GitHubComparisons, SourceChange
 from .git_remote import GitRemoteError, RefKind, RemoteRef, resolve_ref
 from .git_sources import (
     Discovery,

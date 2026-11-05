@@ -17,12 +17,17 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
     device_registry as dr,
+)
+from homeassistant.helpers import (
     entity_registry as er,
+)
+from homeassistant.helpers import (
     issue_registry as ir,
 )
+from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
-from custom_components.esphome_git_updates.const import DOMAIN
 from custom_components.esphome_git_updates.connection import protocol_issue_id
+from custom_components.esphome_git_updates.const import DOMAIN
 from fake_device_builder import (
     FakeDeviceBuilder,
     Transcript,
@@ -33,7 +38,6 @@ from fake_device_builder import (
     serve,
     server_info,
 )
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 from tracked_config import OTA
 
 ENTITY_ID = "update.host_node_firmware"

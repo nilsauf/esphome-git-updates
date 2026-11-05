@@ -27,7 +27,7 @@ from .coordinator import (
     TrackedConfigStore,
 )
 from .git_coordinator import GitSourcesCoordinator
-from .install import ActiveInstall, InstallEnding, Installed, InstallPlan, InstallRunner
+from .install import ActiveInstall, Installed, InstallEnding, InstallPlan, InstallRunner
 from .linked_device import LinkedDevice
 from .options import Options
 from .versions import SourceCommits, Versions

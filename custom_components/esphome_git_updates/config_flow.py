@@ -43,8 +43,8 @@ from .device_builder import (
 from .location import CONF_ADDON_SLUG, DEFAULT_ADDON_SLUG, DeviceBuilderNotFound
 from .options import (
     CONF_CLEAN_BUILD,
-    CONF_GITHUB_TOKEN,
     CONF_GIT_POLL_INTERVAL,
+    CONF_GITHUB_TOKEN,
     CONF_UPLOAD_ADDRESS,
     DEFAULT_CLEAN_BUILD,
     DEFAULT_GIT_POLL_INTERVAL,
