@@ -248,17 +248,6 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
             )
         if (refusal := check.refusal(title)) is not None:
             raise HomeAssistantError(refusal)
-        # It would build the old version and record the new one.
-        unwritable = [
-            f"{state.source.name} {state.source.ref} → {tag}"
-            for state, tag, location in self._moves()
-            if location is None
-        ]
-        if unwritable:
-            raise HomeAssistantError(
-                f"Install of {title} refused: cannot rewrite a ref that is not written "
-                f"as is in the YAML ({'; '.join(unwritable)})"
-            )
 
     def install_plan(self, port: str, clean_build: bool) -> InstallPlan:
         """An Install of what the last poll showed: it records the Latest Commits and

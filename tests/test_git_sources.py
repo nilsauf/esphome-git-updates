@@ -167,24 +167,6 @@ async def test_two_refs_in_one_file_are_rewritten_together() -> None:
     assert rewritten(main, edits) == main.replace("v1.4.0", "v1.10.0").replace("v2.0", "v2.1")
 
 
-async def test_a_ref_from_a_substitution_is_not_located_as_written_inline() -> None:
-    discovery = await _discover(
-        """
-substitutions:
-  version: v1.4.0
-external_components:
-  - source:
-      type: git
-      url: https://gitlab.com/someone/sensors
-      ref: ${version}
-"""
-    )
-
-    [source] = discovery.sources
-    assert source.ref == "v1.4.0"
-    assert source.written_at is None
-
-
 async def test_substitutions_are_applied_to_urls_and_refs() -> None:
     discovery = await _discover(
         """

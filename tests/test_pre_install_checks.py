@@ -244,34 +244,3 @@ async def test_a_second_press_while_the_first_is_still_checking_is_refused(
 
     assert builder.mismatches == []
     builder.transcript = polls
-
-
-async def test_an_install_is_refused_while_a_tag_ref_it_cannot_rewrite_has_an_update(
-    hass: HomeAssistant,
-    builder: FakeDeviceBuilder,
-    marsrelay: GitRepo,
-    hass_storage: dict[str, Any],
-    issue_registry: ir.IssueRegistry,
-) -> None:
-    # Its ref comes from a substitution, so it would build v1.0.0 and record v1.1.0.
-    marsrelay.tag("v1.0.0")
-    marsrelay.push()
-    marsrelay.tag("v1.1.0")
-    builder.files[CONFIGURATION] = (
-        f"substitutions:\n  version: v1.0.0\n{OTA}external_components:\n  - source:\n"
-        f"      type: git\n      url: {marsrelay.url}\n      ref: ${{version}}\n"
-    )
-    yaml = builder.files[CONFIGURATION]
-    await _set_up_with_an_update(hass, builder, hass_storage)
-
-    with pytest.raises(
-        HomeAssistantError,
-        match=r"refused: cannot rewrite a ref that is not written as is in the YAML "
-        r"\(marsrelay v1\.0\.0 → v1\.1\.0\)",
-    ):
-        await press_install(hass)
-
-    assert builder.mismatches == []
-    assert builder.files[CONFIGURATION] == yaml
-    assert hass.states.get(ENTITY_ID).attributes["in_progress"] is False  # type: ignore[union-attr]
-    assert list(issue_registry.issues) == []

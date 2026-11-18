@@ -95,7 +95,8 @@ class GitSource:
     url: str
     # None: the remote's default branch.
     ref: str | None
-    # Where the ref's text is written, if it is written as is in one place.
+    # Where the ref's text is written. Discovery reports a Tag Ref untrackable when
+    # its text cannot be rewritten safely, so every Tag Ref it returns has one.
     written_at: RefLocation | None = field(default=None, compare=False)
 
     @property
@@ -174,6 +175,10 @@ class _Written(str):
     location: RefLocation
 
 
+class _FromVars(str):
+    """A string an include's `vars:` were substituted into."""
+
+
 class _Loader(yaml.SafeLoader):
     """A loader that accepts ESPHome's custom tags, and keeps where strings are written."""
 
@@ -228,6 +233,9 @@ def _construct_tagged(loader: _Loader, suffix: str, node: yaml.Node) -> _Tagged:
 
 
 _Loader.add_constructor("tag:yaml.org,2002:str", _construct_str)
+# Numbers are kept as their text, so that a ref like `1.10` is not read as 1.1.
+_Loader.add_constructor("tag:yaml.org,2002:int", _construct_str)
+_Loader.add_constructor("tag:yaml.org,2002:float", _construct_str)
 _Loader.add_constructor("!secret", _construct_secret)
 _Loader.add_constructor("!include", _construct_include)
 _Loader.add_multi_constructor("!", _construct_tagged)
@@ -242,9 +250,8 @@ async def discover_git_sources(configuration: str, read: Reader) -> Discovery:
     config = await _load(configuration, read, 0)
     gathered = _Gathered()
     gathered.add(config)
-    sources: list[GitSource] = []
-    stale: set[str] = set()
     untrackable = list(gathered.untrackable)
+    parsed: list[tuple[_Candidate, GitSource]] = []
     for candidate in gathered.candidates:
         value = _substitute(candidate.source, gathered.substitutions)
         secret = _find_secret(value)
@@ -255,9 +262,23 @@ async def discover_git_sources(configuration: str, read: Reader) -> Discovery:
             continue
         source = _parse_source(value)
         if source is not None and not _is_pinned_to_a_commit(source):
-            sources.append(source)
-            if not _refreshes_always(_substitute(candidate.refresh, gathered.substitutions)):
-                stale.add(source.key)
+            parsed.append((candidate, source))
+    refs = _refs_by_repository(source for _candidate, source in parsed)
+    uses = _variable_uses(config)
+    sources: list[GitSource] = []
+    stale: set[str] = set()
+    for candidate, source in parsed:
+        if source.kind is RefKind.TAG:
+            location, reason = _locate_tag_ref(candidate, source, refs, uses, gathered)
+            if location is None:
+                untrackable.append(
+                    f"{candidate.where} source {source.name} at {source.ref!r}: {reason}"
+                )
+                continue
+            source = replace(source, written_at=location)
+        sources.append(source)
+        if not _refreshes_always(_substitute(candidate.refresh, gathered.substitutions)):
+            stale.add(source.key)
     distinct = _distinct(sources)
     return Discovery(
         distinct,
@@ -298,6 +319,84 @@ def _distinct(sources: list[GitSource]) -> tuple[GitSource, ...]:
     )
 
 
+def _refs_by_repository(sources: Iterable[GitSource]) -> dict[str, list[str | None]]:
+    """The ref of each place a repository is referred to, by its URL."""
+    refs: dict[str, list[str | None]] = {}
+    for source in sources:
+        refs.setdefault(source.url, []).append(source.ref)
+    return refs
+
+
+def _locate_tag_ref(
+    candidate: _Candidate,
+    source: GitSource,
+    refs: dict[str, list[str | None]],
+    uses: Counter[str],
+    gathered: _Gathered,
+) -> tuple[RefLocation | None, str]:
+    """Where the Tag Ref of *source* is written, so that rewriting it there moves
+    only that ref; or None, and why it cannot be rewritten safely."""
+    if len(set(refs[source.url])) > 1:
+        return None, "its repository is referred to at several refs"
+    if len(refs[source.url]) > 1:
+        return None, "its ref is written in several places"
+    written, raw = _raw_ref(candidate.source)
+    if isinstance(raw, _FromVars):
+        return None, "ref comes from an include's vars"
+    if not isinstance(raw, str) or _VARIABLE.search(raw) is None:
+        return written, "ref is not written as is in the YAML"
+    variable = _VARIABLE.fullmatch(raw)
+    if variable is None:
+        return None, f"ref is built from several parts: {raw!r}"
+    name = variable.group(1) or variable.group(2)
+    if gathered.definitions[name] > 1:
+        return None, f"substitution {name} is defined more than once"
+    if uses[name] > 1:
+        return None, f"substitution {name} is also used elsewhere"
+    value = gathered.substitutions.get(name)
+    if isinstance(value, str) and _VARIABLE.search(value) is not None:
+        return None, f"ref is built from several parts: {value!r}"
+    if not isinstance(value, _Written):
+        return None, f"substitution {name} is not written as is in the YAML"
+    return value.location, ""
+
+
+def _raw_ref(source: Any) -> tuple[RefLocation | None, Any]:
+    """The ref of a raw `source:` or remote package, before substitutions, and where
+    it is written if it is written as is."""
+    if isinstance(source, dict):
+        ref = source.get("ref")
+        return (ref.location if isinstance(ref, _Written) else None), ref
+    if isinstance(source, str) and (match := _GITHUB_SHORTHAND.fullmatch(source)):
+        ref = match.group(4)
+        if isinstance(source, _FromVars):
+            ref = _FromVars(ref)
+        elif isinstance(source, _Written):
+            # The ref is the end of the shorthand's text.
+            whole = source.location
+            return RefLocation(whole.file, whole.end - len(ref), whole.end), ref
+        return None, ref
+    return None, None
+
+
+def _variable_uses(value: Any) -> Counter[str]:
+    """How often each substitution is used in *value*, keys included."""
+    uses: Counter[str] = Counter()
+    if isinstance(value, str):
+        for match in _VARIABLE.finditer(value):
+            uses[match.group(1) or match.group(2)] += 1
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            uses += _variable_uses(key)
+            uses += _variable_uses(item)
+    elif isinstance(value, list):
+        for item in value:
+            uses += _variable_uses(item)
+    elif isinstance(value, _Tagged):
+        uses += _variable_uses(value.value)
+    return uses
+
+
 class _Candidate(NamedTuple):
     """A possible Git Source, as written, before substitutions."""
 
@@ -315,6 +414,8 @@ class _Gathered:
 
     candidates: list[_Candidate] = field(default_factory=list)
     substitutions: dict[str, Any] = field(default_factory=dict)
+    # How many times each substitution is defined.
+    definitions: Counter[str] = field(default_factory=Counter)
     untrackable: list[str] = field(default_factory=list)
     # The raw `platform:` of every `ota:` entry.
     ota_platforms: list[Any] = field(default_factory=list)
@@ -333,6 +434,7 @@ class _Gathered:
         if isinstance(substitutions, dict):
             for name, value in substitutions.items():
                 self.substitutions.setdefault(str(name), value)
+                self.definitions[str(name)] += 1
         # In the order they appear, so Sources are listed as the YAML reads.
         for key, value in config.items():
             if key == "external_components":
@@ -400,7 +502,7 @@ async def _resolve_includes(value: Any, directory: str, read: Reader, depth: int
         path = posixpath.normpath(posixpath.join(directory, value.file))
         included = await _load(path, read, depth + 1)
         # An include's vars are substituted into the included content only.
-        return _substitute(included, value.vars) if value.vars else included
+        return _substitute_vars(included, value.vars) if value.vars else included
     if isinstance(value, dict):
         resolved = {
             key: await _resolve_includes(item, directory, read, depth)
@@ -411,6 +513,21 @@ async def _resolve_includes(value: Any, directory: str, read: Reader, depth: int
         return {**merged, **resolved} if isinstance(merged, dict) else resolved
     if isinstance(value, list):
         return [await _resolve_includes(item, directory, read, depth) for item in value]
+    return value
+
+
+def _substitute_vars(value: Any, variables: dict[str, Any]) -> Any:
+    """*value* with an include's *variables* substituted, each string they changed
+    marked as coming from them."""
+    if isinstance(value, str):
+        substituted = _substitute(value, variables)
+        if isinstance(substituted, str) and substituted != value:
+            return _FromVars(substituted)
+        return substituted
+    if isinstance(value, dict):
+        return {key: _substitute_vars(item, variables) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_substitute_vars(item, variables) for item in value]
     return value
 
 
@@ -469,12 +586,7 @@ def _parse_source(value: Any) -> GitSource | None:
     if isinstance(value, dict) and value.get("type") == "git":
         url = str(value["url"])
         ref = value.get("ref")
-        return GitSource(
-            _repo_name(url),
-            url,
-            None if ref is None else str(ref),
-            ref.location if isinstance(ref, _Written) else None,
-        )
+        return GitSource(_repo_name(url), url, None if ref is None else str(ref))
     return None
 
 

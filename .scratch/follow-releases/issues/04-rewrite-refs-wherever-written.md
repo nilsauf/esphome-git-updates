@@ -4,9 +4,19 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Discovery tests show where the ref is written for: an inline ref, an included file, a local package, a single-use substitution, the shorthand with `@tag`, and a remote package.
-- [ ] Discovery tests report each untrackable case with a reason that names it.
-- [ ] Integration tests: Install rewrites an included file and a single-use substitution's value, and leaves every other file byte-for-byte unchanged.
-- [ ] Integration test: a substitution also used by `project.version` is untrackable, and no update is offered for that source.
+- [x] Discovery tests show where the ref is written for: an inline ref, an included file, a local package, a single-use substitution, the shorthand with `@tag`, and a remote package.
+- [x] Discovery tests report each untrackable case with a reason that names it.
+- [x] Integration tests: Install rewrites an included file and a single-use substitution's value, and leaves every other file byte-for-byte unchanged.
+- [x] Integration test: a substitution also used by `project.version` is untrackable, and no update is offered for that source.
+
+## Comments
+
+- Discovery now guarantees: every Tag Ref it returns has `written_at`; any Tag Ref whose text cannot be rewritten safely is in `untrackable` instead, as "<where> source <name> at '<ref>': <reason>". So ticket 03's Install refusal ("cannot rewrite a ref that is not written as is") and its test are gone; `install_plan` still skips a move without a location.
+- Locations are found in `git_sources._locate_tag_ref` from the candidate's raw (unsubstituted) ref: a `_Written` dict `ref:`; the end of a `_Written` shorthand (`@tag`); or, when the raw ref is exactly one `$x`/`${x}`, the value of substitution `x` (which carries its own file, e.g. a package that defines it). `_parse_source` no longer sets a location.
+- Untrackable reasons: "its repository is referred to at several refs" (any Tag Ref whose URL appears with another ref, including a branch or no ref; the other, non-tag source stays tracked), "its ref is written in several places" (same repo, same tag twice, e.g. a package and a component), "ref comes from an include's vars" (strings an include's `vars:` changed are marked `_FromVars`), "ref is built from several parts", "substitution x is defined more than once" (counted across the config and its local packages), "substitution x is also used elsewhere" (`$x`/`${x}` counted in every key and value of the resolved config, so substitution values referring to it count too), "substitution x is not written as is", "ref is not written as is in the YAML" (escapes, folding).
+- Not covered: a remote package's own files may also use a substitution; they are never read (ADR-0006), so such a use is not counted.
+- `ref: 1.10` bug fixed: the loader constructs YAML ints and floats as their text (`_Written` strings), so a ref, a substitution value or anything else numeric keeps its scalar text.
+- Ticket 06: the "several refs" check only marks Tag Refs untrackable (`RefKind.TAG`); extend `_locate_tag_ref`'s callers to Unset Refs while they follow versions if needed.
+- Tests: discovery in `tests/test_ref_locations.py`, Install in `tests/test_ref_rewrite_install.py`. README updated.
