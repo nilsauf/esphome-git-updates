@@ -117,6 +117,7 @@ Which mode a source is in is re-checked on every poll. Only strictly newer versi
 ### Display
 
 - The composite version shows a followed source as `name <version>` instead of `name <short sha>`. The release summary line reads `name v1.4.0 → v1.5.0`.
+- **Commit count (decided during implementation):** when the change was compared over GitHub's API, the summary line and the release notes heading end with the number of commits, as `name v1.4.0 → v1.5.0 (3 commits)`, as they already do for commits. A source off GitHub, or one whose compare failed, shows no suffix.
 - **Release notes** for a source following Releases have one sub-section per Release newer than the Installed Tag, up to the followed one, newest first. Each sub-section has the Release's title, a link and its body.
 - **Release notes** for a source following Version Tags on GitHub use the existing compare between the two tags' commits. Off GitHub, they show only the version change.
 - **Options flow:** the GitHub token's description says it is also used to check for Releases.

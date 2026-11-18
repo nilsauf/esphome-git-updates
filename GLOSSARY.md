@@ -49,7 +49,7 @@ A Git Source ref that names a commit; it never produces an update.
 _Avoid_: fixed ref, locked ref
 
 **Release**:
-A published GitHub release of a Git Source's repository that is neither a draft nor a prerelease; other hosts are taken to have no Releases.
+A published GitHub release of a Git Source's repository that is neither a draft nor a prerelease and whose tag is a Version Tag; other hosts are taken to have no Releases.
 _Avoid_: version (when meaning the GitHub object)
 
 **Version Tag**:
@@ -81,7 +81,7 @@ How long ESPHome reuses its cached clone of a Git Source before fetching again; 
 ### Building
 
 **Install**:
-One update run for a Tracked Config: an optional Clean Build step, then compile, then over-the-air upload.
+One update run for a Tracked Config: an "update YAML" step that rewrites any Tag Ref or Unset Ref moving to a newer version, then an optional Clean Build step, then compile, then over-the-air upload.
 _Avoid_: build, flash, update (when meaning the run)
 
 **Clean Build**:

@@ -1,8 +1,8 @@
 # ESPHome Git Updates
 
-A Home Assistant integration that offers firmware updates for ESPHome devices whose firmware pulls code from git. It watches one ESPHome configuration per config entry and shows a single update entity for it. An update appears when the Device Builder would compile with a newer ESPHome version, or when a branch used by one of the configuration's `external_components` or remote `packages:` gets a new commit. Pressing Install compiles and flashes the device over the air through the ESPHome Device Builder.
+A Home Assistant integration that offers firmware updates for ESPHome devices whose firmware pulls code from git. It watches one ESPHome configuration per config entry and shows a single update entity for it. An update appears when the Device Builder would compile with a newer ESPHome version, when a Floating Ref (a branch) used by one of the configuration's `external_components` or remote `packages:` gets a new commit, or when a Tag Ref or Unset Ref gets a newer Release or Version Tag. Pressing Install compiles and flashes the device over the air through the ESPHome Device Builder.
 
-Terms used here (Tracked Config, Git Source, Floating Ref, …) are defined in [GLOSSARY.md](GLOSSARY.md).
+Terms used here (Tracked Config, Git Source, Floating Ref, Tag Ref, Unset Ref, Version Tag, …) are defined in [GLOSSARY.md](GLOSSARY.md).
 
 ## Requirements
 
@@ -43,7 +43,7 @@ ota:
 
 ### `refresh: always`
 
-ESPHome reuses its cached clone of a Git Source until its Refresh Policy (`refresh`, default `1d`) runs out, so without it an Install can compile the old commit. Every Git Source that follows commits must set `refresh: always` (or `0s`); a source following versions needs no Refresh Policy:
+ESPHome reuses its cached clone of a Git Source until its Refresh Policy (`refresh`, default `1d`) runs out, so without it an Install can compile the old commit. Every Git Source that follows commits (a Floating Ref, or an Unset Ref following its Latest Commit) must set `refresh: always` (or `0s`); a Tag Ref, or an Unset Ref following versions, needs no Refresh Policy:
 
 ```yaml
 external_components:
@@ -61,7 +61,7 @@ packages:
     refresh: always
 ```
 
-Floating Refs (a branch, or a tag that is not a version such as `stable`) follow their Latest Commit. A source with no ref follows the GitHub Releases or Version Tags of its repository as a Tag Ref does, and its Latest Commit only while the repository has neither; when it starts following a version, that version counts as installed, and the first Install of a newer one adds the ref (`ref: v1.5.0` after `url:`, or `@v1.5.0` on the `github://` shorthand). A source with no ref in a flow-style mapping (`{type: git, url: ...}`) keeps following its Latest Commit, as no ref can be inserted there. A Tag Ref (a Version Tag such as `v1.2.3`) follows the newest GitHub Release (drafts, prereleases and non-version tags ignored), or, when the repository has no Releases or is not on GitHub, the highest Version Tag on its remote. Install writes the version shown into the YAML through the Device Builder (refusing if the file changed since it was read), then compiles and uploads; it rewrites the ref where its text is written: in the device YAML, an `!include`d or local-package file, the `@tag` of a `github://` shorthand, or a substitution used only for that ref (see [ADR-0007](docs/adr/0007-install-rewrites-tag-refs.md)). A Tag Ref whose text is shared (a substitution used elsewhere or defined twice, an include's `vars:`, a ref built from several parts, or the same repository at two refs) is logged as untrackable instead. Pinned Refs (a commit) never produce an update. See [ADR-0004](docs/adr/0004-require-refresh-always.md) for why a Clean Build is not a substitute.
+Floating Refs (a branch, or a tag that is not a Version Tag such as `stable`) follow their Latest Commit. An Unset Ref (a Git Source with no ref) follows the GitHub Releases or Version Tags of its repository as a Tag Ref does, and its Latest Commit only while the repository has neither; when it starts following a version, that version counts as installed, and the first Install of a newer one adds the ref (`ref: v1.5.0` after `url:`, or `@v1.5.0` on the `github://` shorthand). An Unset Ref in a flow-style mapping (`{type: git, url: ...}`) keeps following its Latest Commit, as no ref can be inserted there. A Tag Ref (a Version Tag such as `v1.2.3`) follows the newest GitHub Release (drafts, prereleases and non-version tags ignored), or, when the repository has no Releases or is not on GitHub, the highest Version Tag on its remote. Install writes the version shown into the YAML through the Device Builder (refusing if the file changed since it was read), then compiles and uploads; it rewrites the Tag Ref wherever its text is written: in the device YAML, an `!include`d or local-package file, the `@tag` of a `github://` shorthand, or a substitution used only for that ref, and in each of those places when the same Tag Ref is written more than once (see [ADR-0007](docs/adr/0007-install-rewrites-tag-refs.md)). A version YAML would read as a number, such as `1.10`, is written quoted. A Tag Ref whose text is shared (a substitution used elsewhere or defined twice, an include's `vars:`, a ref built from several parts, or the same repository at two different refs) is logged as untrackable instead. Pinned Refs (a commit) never produce an update. See [ADR-0004](docs/adr/0004-require-refresh-always.md) for why a Clean Build is not a substitute.
 
 ## Releasing
 
