@@ -141,9 +141,9 @@ external_components:
     discovery = await _discover(main)
 
     [source] = discovery.sources
-    assert source.written_at is not None
-    assert source.written_at.file == "node.yaml"
-    assert rewritten(main, [(source.written_at, "v1.10.0")]) == main.replace(
+    [location] = source.written_at
+    assert location.file == "node.yaml"
+    assert rewritten(main, [(location, "v1.10.0")]) == main.replace(
         f"ref:   {written}", f"ref:   {written.replace('v1.4.0', 'v1.10.0')}"
     )
 
@@ -161,9 +161,11 @@ async def test_two_refs_in_one_file_are_rewritten_together() -> None:
 """
     discovery = await _discover(main)
 
-    edits = [(source.written_at, tag) for source, tag in zip(
-        discovery.sources, ["v1.10.0", "v2.1"], strict=True
-    ) if source.written_at is not None]
+    edits = [
+        (location, tag)
+        for source, tag in zip(discovery.sources, ["v1.10.0", "v2.1"], strict=True)
+        for location in source.written_at
+    ]
     assert rewritten(main, edits) == main.replace("v1.4.0", "v1.10.0").replace("v2.0", "v2.1")
 
 
@@ -517,9 +519,9 @@ packages:
     discovery = await _discover(main)
 
     edits = [
-        (source.written_at, "v1.5.0")
+        (location, "v1.5.0")
         for source in discovery.sources
-        if source.written_at is not None
+        for location in source.written_at
     ]
     assert len(edits) == 2
     assert rewritten(main, edits) == main.replace(
@@ -531,17 +533,17 @@ async def test_an_inserted_ref_that_would_not_read_as_a_string_is_quoted() -> No
     main = "external_components:\n  - source:\n      type: git\n      url: https://x/y\n"
     discovery = await _discover(main)
     [source] = discovery.sources
-    assert source.written_at is not None
+    [location] = source.written_at
 
-    assert rewritten(main, [(source.written_at, "1.10")]) == main + '      ref: "1.10"\n'
+    assert rewritten(main, [(location, "1.10")]) == main + '      ref: "1.10"\n'
 
 
 async def test_an_unset_ref_on_the_last_line_without_a_newline_is_inserted_after_it() -> None:
     main = "external_components:\n  - source:\n      type: git\n      url: https://x/y"
     [source] = (await _discover(main)).sources
-    assert source.written_at is not None
+    [location] = source.written_at
 
-    assert rewritten(main, [(source.written_at, "v2")]) == main + "\n      ref: v2"
+    assert rewritten(main, [(location, "v2")]) == main + "\n      ref: v2"
 
 
 async def test_a_shorthand_without_a_ref_is_located_where_its_ref_is_appended() -> None:
@@ -554,9 +556,9 @@ packages:
     discovery = await _discover(main)
 
     edits = [
-        (source.written_at, "v1.5.0")
+        (location, "v1.5.0")
         for source in discovery.sources
-        if source.written_at is not None
+        for location in source.written_at
     ]
     assert len(edits) == 2
     assert rewritten(main, edits) == main.replace("marsrelay\"", "marsrelay@v1.5.0\"").replace(
@@ -575,7 +577,7 @@ external_components:
     [source] = discovery.sources
     # It still follows its Latest Commit, but a ref cannot be inserted to follow versions.
     assert source.ref is None
-    assert source.written_at is None
+    assert source.written_at == ()
     [reason] = discovery.untrackable
     assert "flow-style" in reason
     assert "https://gitlab.com/someone/sensors" in reason
@@ -588,4 +590,4 @@ async def test_an_empty_ref_key_is_not_given_a_second_ref_line() -> None:
 
     [source] = discovery.sources
     assert source.ref is None
-    assert source.written_at is None
+    assert source.written_at == ()

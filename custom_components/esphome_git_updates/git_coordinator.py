@@ -254,8 +254,8 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
         versions shown (ADR-0003), after moving each Tag Ref to the version shown
         (ADR-0007). Call it right after `async_check_before_install`."""
         edits: dict[str, list[tuple[RefLocation, str]]] = {}
-        for _state, tag, location in self._moves():
-            if location is not None:
+        for _state, tag, locations in self._moves():
+            for location in locations:
                 edits.setdefault(location.file, []).append((location, tag))
         rewrites = tuple(
             YamlRewrite(file, rewritten(self._files[file], refs), self._files[file])
@@ -270,9 +270,9 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
             _latest_commits(self.data or {}), port, clean_build, tags=tags, rewrites=rewrites
         )
 
-    def _moves(self) -> list[tuple[VersionedGitSource, str, RefLocation | None]]:
+    def _moves(self) -> list[tuple[VersionedGitSource, str, tuple[RefLocation, ...]]]:
         """Each Source following versions whose ref must move to the version offered,
-        with that version and where its ref is written, if it can be rewritten.
+        with that version and each place its ref is written, if it can be rewritten.
 
         An Unset Ref gains a ref only when a newer version is offered.
         """
@@ -419,7 +419,7 @@ async def _ask_remote(source: GitSource) -> GitSourceState:
     remote has a Version Tag (a Release's tag is one) and an Install can
     insert its ref; else its Latest Commit.
     """
-    if source.kind is RefKind.UNSET and source.written_at is not None:
+    if source.kind is RefKind.UNSET and source.written_at:
         remote = await resolve_ref_and_tags(source.url, None)
         versions = _version_tags(remote.tags)
         if not versions and remote.ref is not None:

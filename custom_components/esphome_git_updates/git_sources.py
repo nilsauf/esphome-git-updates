@@ -111,9 +111,10 @@ class GitSource:
     url: str
     # None: the remote's default branch.
     ref: str | None
-    # Where the ref's text is written. Discovery reports a Tag Ref untrackable when
-    # its text cannot be rewritten safely, so every Tag Ref it returns has one.
-    written_at: RefLocation | None = field(default=None, compare=False)
+    # Each place the ref's text is written, all rewritten together; for an Unset
+    # Ref, where one is inserted. Discovery reports a Tag Ref untrackable when its
+    # text cannot be rewritten safely, so every Tag Ref it returns has one or more.
+    written_at: tuple[RefLocation, ...] = field(default=(), compare=False)
 
     @property
     def kind(self) -> RefKind:
@@ -316,24 +317,37 @@ async def discover_git_sources(configuration: str, read: Reader) -> Discovery:
             parsed.append((candidate, source))
     refs = _refs_by_repository(source for _candidate, source in parsed)
     uses = _variable_uses(config)
-    sources: list[GitSource] = []
-    stale: set[str] = set()
-    # Repositories of Unset Refs that cannot follow versions, noted once each.
-    shared: set[str] = set()
-    for candidate, source in parsed:
+    # Where each Tag Ref candidate is written, by its index in parsed, and the
+    # repositories with a Tag Ref written somewhere it cannot be rewritten.
+    located: dict[int, RefLocation] = {}
+    unlocated: set[str] = set()
+    for index, (candidate, source) in enumerate(parsed):
         if source.kind is RefKind.TAG:
             location, reason = _locate_tag_ref(candidate, source, refs, uses, gathered)
             if location is None:
                 untrackable.append(
                     f"{candidate.where} source {source.name} at {source.ref!r}: {reason}"
                 )
+                unlocated.add(source.url)
+            else:
+                located[index] = location
+    sources: list[GitSource] = []
+    stale: set[str] = set()
+    # Repositories of Unset Refs that cannot follow versions, noted once each.
+    shared: set[str] = set()
+    for index, (candidate, source) in enumerate(parsed):
+        if source.kind is RefKind.TAG:
+            if index not in located:
                 continue
-            source = replace(source, written_at=location)
-        elif (
-            source.kind is RefKind.UNSET
-            and source.written_at is not None
-            and len(refs[source.url]) > 1
-        ):
+            if source.url in unlocated:
+                # Rewriting only the other places would leave it at two refs.
+                untrackable.append(
+                    f"{candidate.where} source {source.name} at {source.ref!r}: its ref "
+                    "is also written where it cannot be rewritten"
+                )
+                continue
+            source = replace(source, written_at=(located[index],))
+        elif source.kind is RefKind.UNSET and source.written_at and len(refs[source.url]) > 1:
             # A ref inserted in one place only would leave the repository at two refs.
             if source.url not in shared:
                 untrackable.append(
@@ -341,7 +355,7 @@ async def discover_git_sources(configuration: str, read: Reader) -> Discovery:
                     "places, so it cannot follow versions; it follows its Latest Commit"
                 )
                 shared.add(source.url)
-            source = replace(source, written_at=None)
+            source = replace(source, written_at=())
         sources.append(source)
         if not _refreshes_always(_substitute(candidate.refresh, gathered.substitutions)):
             stale.add(source.key)
@@ -372,10 +386,15 @@ def _ota_status(gathered: _Gathered) -> OtaStatus:
 
 
 def _distinct(sources: list[GitSource]) -> tuple[GitSource, ...]:
-    """*sources* without duplicates, with a ref added to names that would be ambiguous."""
+    """*sources* without duplicates, each written wherever its duplicates are, with a
+    ref added to names that would be ambiguous."""
     unique: dict[str, GitSource] = {}
     for source in sources:
-        unique.setdefault(source.key, source)
+        kept = unique.setdefault(source.key, source)
+        written_at = kept.written_at + tuple(
+            location for location in source.written_at if location not in kept.written_at
+        )
+        unique[source.key] = replace(kept, written_at=written_at)
     names = Counter(source.name for source in unique.values())
     return tuple(
         replace(source, name=f"{source.name}@{source.ref or 'HEAD'}")
@@ -400,12 +419,10 @@ def _locate_tag_ref(
     uses: Counter[str],
     gathered: _Gathered,
 ) -> tuple[RefLocation | None, str]:
-    """Where the Tag Ref of *source* is written, so that rewriting it there moves
+    """Where the Tag Ref of *candidate* is written, so that rewriting it there moves
     only that ref; or None, and why it cannot be rewritten safely."""
     if len(set(refs[source.url])) > 1:
         return None, "its repository is referred to at several refs"
-    if len(refs[source.url]) > 1:
-        return None, "its ref is written in several places"
     written, raw = _raw_ref(candidate.source)
     if isinstance(raw, _FromVars):
         return None, "ref comes from an include's vars"
@@ -649,22 +666,22 @@ def _parse_source(value: Any) -> GitSource | None:
             return None
         owner, repo, _path, ref = match.groups()
         appended = (
-            RefLocation(value.location.file, value.location.end, value.location.end, "@")
+            (RefLocation(value.location.file, value.location.end, value.location.end, "@"),)
             if ref is None and isinstance(value, _Written)
-            else None
+            else ()
         )
         return GitSource(repo, f"https://github.com/{owner}/{repo}.git", ref, appended)
     if isinstance(value, dict) and value.get("type") == "git":
         url = str(value["url"])
         ref = value.get("ref")
-        if ref is not None:
-            location = ref.location if isinstance(ref, _Written) else None
-        elif "ref" in value:
-            # An empty `ref:`; a second one must not be inserted.
-            location = None
-        else:
-            location = _url_key(value).ref_insertion
-        return GitSource(_repo_name(url), url, None if ref is None else str(ref), location)
+        # A Tag Ref is located later; an empty `ref:` must not get a second one.
+        insertion = None if "ref" in value else _url_key(value).ref_insertion
+        return GitSource(
+            _repo_name(url),
+            url,
+            None if ref is None else str(ref),
+            () if insertion is None else (insertion,),
+        )
     return None
 
 

@@ -25,8 +25,7 @@ async def _moved(tag: str, main: str, **others: str) -> dict[str, str]:
     discovery = await _discover(files)
     assert discovery.untrackable == ()
     [source] = discovery.sources
-    assert source.written_at is not None
-    location = source.written_at
+    [location] = source.written_at
     return {**files, location.file: rewritten(files[location.file], [(location, tag)])}
 
 
@@ -114,8 +113,8 @@ async def test_a_number_like_ref_keeps_its_text(written: str) -> None:
 
     [source] = discovery.sources
     assert source.ref == written
-    assert source.written_at is not None
-    assert rewritten(main, [(source.written_at, "v1.11")]) == main.replace(written, "v1.11")
+    [location] = source.written_at
+    assert rewritten(main, [(location, "v1.11")]) == main.replace(written, "v1.11")
 
 
 @pytest.mark.parametrize(
@@ -316,21 +315,67 @@ async def test_the_same_repository_at_two_refs_is_untrackable() -> None:
     assert all("referred to at several refs" in reason for reason in discovery.untrackable)
 
 
-async def test_the_same_tag_ref_written_twice_is_untrackable() -> None:
-    """Both places would have to be rewritten together."""
-    discovery = await _discover(
-        {
-            "node.yaml": """packages:
+async def test_the_same_tag_ref_written_in_several_places_is_rewritten_in_each() -> None:
+    common = """external_components:
+  - source:
+      type: git
+      url: https://github.com/someone/sensors.git
+      ref: v1.4.0
+"""
+    main = """packages:
   sensors: github://someone/sensors/sensors.yaml@v1.4.0
+  common: !include common.yaml
 external_components:
   - source: github://someone/sensors@v1.4.0
 """
+    files = {"node.yaml": main, "common.yaml": common}
+
+    discovery = await _discover(files)
+
+    assert discovery.untrackable == ()
+    [source] = discovery.sources
+    assert source.ref == "v1.4.0"
+    assert {location.file for location in source.written_at} == set(files)
+    assert {
+        file: rewritten(
+            text,
+            [(location, "v1.5.0") for location in source.written_at if location.file == file],
+        )
+        for file, text in files.items()
+    } == {file: text.replace("v1.4.0", "v1.5.0") for file, text in files.items()}
+
+
+async def test_an_included_file_with_a_tag_ref_included_twice_is_rewritten_once() -> None:
+    common = "external_components:\n  - source: github://someone/sensors@v1.4.0\n"
+    main = "packages:\n  a: !include common.yaml\n  b: !include common.yaml\n"
+
+    moved = await _moved("v1.5.0", main, **{"common.yaml": common})
+
+    assert moved == {"node.yaml": main, "common.yaml": common.replace("v1.4.0", "v1.5.0")}
+
+
+async def test_a_tag_ref_also_written_where_it_cannot_be_rewritten_is_untrackable() -> None:
+    """Rewriting only the other places would leave the repository at two refs."""
+    discovery = await _discover(
+        {
+            "node.yaml": """packages:
+  sensors: !include
+    file: sensors.yaml
+    vars:
+      fw_ver: v1.4.0
+external_components:
+  - source: github://someone/sensors@v1.4.0
+""",
+            "sensors.yaml": "external_components:\n  - source: github://someone/sensors@${fw_ver}\n",
         }
     )
 
     assert discovery.sources == ()
     assert len(discovery.untrackable) == 2
-    assert all("written in several places" in reason for reason in discovery.untrackable)
+    assert any("ref comes from an include's vars" in reason for reason in discovery.untrackable)
+    assert any(
+        "also written where it cannot be rewritten" in reason for reason in discovery.untrackable
+    )
 
 
 @pytest.mark.parametrize("other", ["github://someone/sensors", "github://someone/sensors@main"])
@@ -350,6 +395,6 @@ external_components:
 
     unset = [source for source in discovery.sources if source.ref is None]
     assert unset != []
-    assert all(source.written_at is None for source in unset)
+    assert all(source.written_at == () for source in unset)
     [reason] = discovery.untrackable
     assert "referred to in several places" in reason
