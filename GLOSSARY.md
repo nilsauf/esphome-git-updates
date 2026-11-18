@@ -33,19 +33,39 @@ An `external_components` or remote `packages:` entry of a Tracked Config that po
 _Avoid_: component, repo, external component (when meaning the source)
 
 **Floating Ref**:
-A Git Source ref that names a branch (or no ref at all), so its commit moves over time; only Floating Refs are tracked.
+A Git Source ref that names a branch, or a tag that is not a Version Tag, so its commit can move over time; it is followed by Latest Commit and never rewritten.
 _Avoid_: unpinned, moving ref
 
+**Tag Ref**:
+A Git Source ref that names a Version Tag; it is followed by Releases, else by Version Tags, and an Install moves it to the newer one.
+_Avoid_: release ref
+
+**Unset Ref**:
+A Git Source with no ref, which ESPHome builds from the remote's default branch; it is followed by Releases, else by Version Tags, else by Latest Commit.
+_Avoid_: default ref, HEAD
+
 **Pinned Ref**:
-A Git Source ref that names a tag or commit; it never produces an update.
+A Git Source ref that names a commit; it never produces an update.
 _Avoid_: fixed ref, locked ref
+
+**Release**:
+A published GitHub release of a Git Source's repository that is neither a draft nor a prerelease; other hosts are taken to have no Releases.
+_Avoid_: version (when meaning the GitHub object)
+
+**Version Tag**:
+A git tag whose name reads as a version (such as `v1.2.3` or `1.2`) without a prerelease suffix; tags are ordered by that version, never by date.
+_Avoid_: latest tag (when meaning the newest by date)
 
 **Installed Commit**:
 The commit of a Git Source that the integration recorded when it last successfully flashed the Tracked Config.
 _Avoid_: current sha, deployed commit
 
+**Installed Tag**:
+The Version Tag of a Tag Ref that the integration recorded when it last successfully flashed the Tracked Config; until then, the tag the YAML names.
+_Avoid_: current release, YAML tag (when meaning what the device runs)
+
 **Latest Commit**:
-The commit a Floating Ref currently points to on its remote.
+The commit a Floating Ref, or an Unset Ref with no Releases and no Version Tags, currently points to on its remote.
 _Avoid_: head, newest sha
 
 **Installed ESPHome Version**:

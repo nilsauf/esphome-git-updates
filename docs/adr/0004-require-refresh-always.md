@@ -12,3 +12,4 @@ Checked against ESPHome 2026.10.1 and Device Builder 1.26.0 (ticket 08):
 - A changed `ref:` changes the clone's cache key, so it is always cloned fresh, whatever its `refresh`.
 - A remote build server fetches Git Sources itself, into its own clone cache with its own refresh timer. The bundle sent to it carries no clones. `refresh: always` covers it too, because it reads the same YAML.
 - A clean also deletes caches every config shares (`pio_components` and PlatformIO's download cache), so it slows the next build of every config, not just this one. That is one more reason Clean Build is opt-in.
+- Tag Refs (ADR-0007) are exempt: a Version Tag's content does not move, and moving to a new one changes the cache key. The requirement still applies to Floating Refs and to Unset Refs while they follow commits.
