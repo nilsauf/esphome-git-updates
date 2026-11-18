@@ -157,7 +157,27 @@ async def test_a_config_that_passes_both_checks_installs_and_raises_no_issue(
     assert hass.states.get(ENTITY_ID).state == STATE_OFF  # type: ignore[union-attr]
 
 
-async def test_a_git_source_on_a_tag_needs_no_refresh_policy(
+async def test_a_git_source_on_a_non_version_tag_needs_refresh_always_like_a_branch(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    marsrelay: GitRepo,
+    hass_storage: dict[str, Any],
+    issue_registry: ir.IssueRegistry,
+) -> None:
+    marsrelay.tag("stable")
+    builder.files[CONFIGURATION] = (
+        f"{OTA}external_components:\n  - source:\n      type: git\n"
+        f"      url: {marsrelay.url}\n      ref: stable\n"
+    )
+    await _set_up_with_an_update(hass, builder, hass_storage)
+
+    with pytest.raises(HomeAssistantError, match="Git Sources marsrelay lack `refresh: always`"):
+        await press_install(hass)
+
+    assert _issue(issue_registry, "refresh_policy") is not None
+
+
+async def test_a_git_source_on_a_version_tag_needs_no_refresh_policy(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
     marsrelay: GitRepo,

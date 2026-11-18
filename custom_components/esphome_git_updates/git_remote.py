@@ -18,16 +18,14 @@ class GitRemoteError(Exception):
     """The remote could not be asked, or does not have the ref."""
 
 
-class RefKind(StrEnum):
-    # A Floating Ref: tracked.
+class RemoteRefKind(StrEnum):
     BRANCH = "branch"
-    # A Pinned Ref: never produces an update.
     TAG = "tag"
 
 
 @dataclass(frozen=True)
 class RemoteRef:
-    kind: RefKind
+    kind: RemoteRefKind
     commit: str
 
 
@@ -40,15 +38,15 @@ async def resolve_ref(url: str, ref: str | None) -> RemoteRef:
         refs = await _ls_remote(url, "HEAD")
         if "HEAD" not in refs:
             raise GitRemoteError(f"{url} has no default branch")
-        return RemoteRef(RefKind.BRANCH, refs["HEAD"])
+        return RemoteRef(RemoteRefKind.BRANCH, refs["HEAD"])
     branch = ref if ref.startswith("refs/heads/") else f"refs/heads/{ref}"
     tag = ref if ref.startswith("refs/tags/") else f"refs/tags/{ref}"
     refs = await _ls_remote(url, branch, tag)
     if branch in refs:
-        return RemoteRef(RefKind.BRANCH, refs[branch])
+        return RemoteRef(RemoteRefKind.BRANCH, refs[branch])
     if tag in refs:
         # An annotated tag is also listed peeled, as the commit it points to.
-        return RemoteRef(RefKind.TAG, refs.get(f"{tag}^{{}}", refs[tag]))
+        return RemoteRef(RemoteRefKind.TAG, refs.get(f"{tag}^{{}}", refs[tag]))
     raise GitRemoteError(f"{url} has no branch or tag {ref}")
 
 

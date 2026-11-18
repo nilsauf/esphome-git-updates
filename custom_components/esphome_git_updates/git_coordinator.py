@@ -16,12 +16,13 @@ from .connection import DeviceBuilderSession, DeviceBuilderUnavailable, Protocol
 from .const import CONF_CONFIGURATION, DOMAIN
 from .coordinator import EsphomeGitUpdatesConfigEntry, TrackedConfigStore
 from .device_builder import CommandFailed, DeviceBuilderClient
-from .git_remote import GitRemoteError, RefKind, RemoteRef, resolve_ref
+from .git_remote import GitRemoteError, RemoteRef, RemoteRefKind, resolve_ref
 from .git_sources import (
     Discovery,
     DiscoveryError,
     GitSource,
     Reader,
+    RefKind,
     discover_git_sources,
 )
 from .options import Options
@@ -35,7 +36,7 @@ _POLLER = "git"
 
 @dataclass(frozen=True)
 class TrackedGitSource:
-    """A Git Source on a Floating Ref, with the Latest Commit last seen on its remote."""
+    """A Git Source on a Floating Ref or Unset Ref, with the Latest Commit last seen on its remote."""
 
     source: GitSource
     latest_commit: str
@@ -111,7 +112,7 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
             if isinstance(result, BaseException):
                 raise result
             self._log_recovery(source)
-            if _is_floating(result):
+            if _is_floating(source, result):
                 tracked[source.key] = TrackedGitSource(source, result.commit)
         await self._store.async_seed_installed_commits(
             _latest_commits(tracked), {source.key for source in discovery.sources}
@@ -229,9 +230,12 @@ def _latest_commits(tracked: dict[str, TrackedGitSource]) -> dict[str, str]:
     return {key: tracked_source.latest_commit for key, tracked_source in tracked.items()}
 
 
-def _is_floating(ref: RemoteRef) -> bool:
-    """Only Floating Refs are tracked; a tag is a Pinned Ref."""
-    return ref.kind is RefKind.BRANCH
+def _is_floating(source: GitSource, ref: RemoteRef) -> bool:
+    """Only Floating Refs are tracked: a branch, or a tag that is not a Version Tag.
+
+    Tag Refs are not followed yet.
+    """
+    return ref.kind is RemoteRefKind.BRANCH or source.kind is not RefKind.TAG
 
 
 def _reader(client: DeviceBuilderClient, configuration: str) -> Reader:

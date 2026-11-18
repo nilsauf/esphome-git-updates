@@ -8,8 +8,8 @@ import pytest
 
 from custom_components.esphome_git_updates.git_remote import (
     GitRemoteError,
-    RefKind,
     RemoteRef,
+    RemoteRefKind,
     resolve_ref,
 )
 from git_repo import GitRepo
@@ -23,21 +23,21 @@ def repo(tmp_path: Path) -> GitRepo:
 async def test_no_ref_resolves_to_the_default_branch(repo: GitRepo) -> None:
     latest = repo.push()
 
-    assert await resolve_ref(repo.url, None) == RemoteRef(RefKind.BRANCH, latest)
+    assert await resolve_ref(repo.url, None) == RemoteRef(RemoteRefKind.BRANCH, latest)
 
 
 async def test_a_branch_is_a_floating_ref_at_its_latest_commit(repo: GitRepo) -> None:
     dev = repo.push("dev")
     repo.push("main")
 
-    assert await resolve_ref(repo.url, "dev") == RemoteRef(RefKind.BRANCH, dev)
+    assert await resolve_ref(repo.url, "dev") == RemoteRef(RemoteRefKind.BRANCH, dev)
 
 
 async def test_a_tag_is_a_pinned_ref(repo: GitRepo) -> None:
     tagged = repo.tag("v1.0.0")
     repo.push()
 
-    assert await resolve_ref(repo.url, "v1.0.0") == RemoteRef(RefKind.TAG, tagged)
+    assert await resolve_ref(repo.url, "v1.0.0") == RemoteRef(RemoteRefKind.TAG, tagged)
 
 
 async def test_a_ref_the_remote_does_not_have_is_an_error(repo: GitRepo) -> None:

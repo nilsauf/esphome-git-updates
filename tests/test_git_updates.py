@@ -278,18 +278,68 @@ async def test_the_yaml_and_its_includes_are_read_from_the_device_builder_but_ne
     assert "!secret private_repo" in caplog.text
 
 
-async def test_a_git_source_on_a_tag_is_pinned_and_not_tracked(
-    hass: HomeAssistant, builder: FakeDeviceBuilder, marsrelay: GitRepo
-) -> None:
-    marsrelay.tag("v1.0.0")
-    builder.files[CONFIGURATION] = (
-        f"external_components:\n  - source:\n      type: git\n"
-        f"      url: {marsrelay.url}\n      ref: v1.0.0\n"
+def _config_at(url: str, ref: str) -> str:
+    """A Tracked Config with one external component from *url* at *ref*."""
+    return (
+        f"esphome:\n  name: host-node\n{OTA}external_components:\n  - source:\n"
+        f"      type: git\n      url: {url}\n      ref: {ref}\n    refresh: always\n"
     )
 
+
+async def test_a_non_version_tag_is_a_floating_ref_that_follows_its_commit(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    marsrelay: GitRepo,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    installed = marsrelay.tag("stable")
+    builder.files[CONFIGURATION] = _config_at(marsrelay.url, "stable")
+    await set_up(hass, builder)
+    assert _state(hass).state == STATE_OFF
+    assert _state(hass).attributes["installed_version"] == (
+        f"2026.10.1 (marsrelay {installed[:7]})"
+    )
+
+    marsrelay.push()
+    moved = marsrelay.tag("stable")
+    await tick(hass, freezer, 30.1)
+
+    state = _state(hass)
+    assert state.state == STATE_ON
+    assert state.attributes["release_summary"] == f"marsrelay {installed[:7]} → {moved[:7]}"
+
+    await install(hass, builder, "install_clean_success")
+
+    assert _state(hass).state == STATE_OFF
+    assert _state(hass).attributes["installed_version"] == f"2026.10.1 (marsrelay {moved[:7]})"
+    # The ref is never rewritten.
+    assert builder.files[CONFIGURATION] == _config_at(marsrelay.url, "stable")
+    await tick(hass, freezer, 30.1)
+    assert _state(hass).state == STATE_OFF
+
+
+@pytest.mark.parametrize("version_tag", ["v1.2.3", "1.2"])
+async def test_a_version_tag_or_a_commit_never_produces_an_update(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    marsrelay: GitRepo,
+    freezer: FrozenDateTimeFactory,
+    version_tag: str,
+) -> None:
+    marsrelay.tag(version_tag)
+    commit = marsrelay.latest_commit()
+    builder.files[CONFIGURATION] = _config_at(marsrelay.url, version_tag) + (
+        f"  - source:\n      type: git\n      url: {marsrelay.url}\n      ref: {commit}\n"
+    )
     await set_up(hass, builder)
 
-    assert _state(hass).attributes["installed_version"] == "2026.10.1"
+    marsrelay.push()
+    marsrelay.tag(version_tag)
+    await tick(hass, freezer, 30.1)
+
+    state = _state(hass)
+    assert state.state == STATE_OFF
+    assert state.attributes["installed_version"] == "2026.10.1"
 
 
 async def test_git_sources_that_cannot_be_read_at_setup_do_not_hold_up_the_esphome_update(

@@ -25,6 +25,11 @@ _GITHUB_SHORTHAND = re.compile(r"github://([^/@]+)/([^/@]+)(/[^@]*)?(?:@(.+))?")
 # A ref naming a commit, full or abbreviated: a Pinned Ref.
 _COMMIT_SHA = re.compile(r"[0-9a-f]{7,40}")
 
+# A Version Tag: an optional `v`/`V`, then one to four dot-separated integers.
+_VERSION_TAG = re.compile(r"[vV]?([0-9]+(?:\.[0-9]+){0,3})")
+# Versions are compared padded with zeros to this many parts, so `v1.2` equals `1.2.0`.
+_VERSION_PARTS = 4
+
 # A Refresh Policy of zero time: ESPHome fetches the Source on every build (ADR-0004).
 _ZERO_REFRESH = re.compile(r"0+(\.0+)?\s*[a-z]*")
 
@@ -35,6 +40,31 @@ _MAX_INCLUDE_DEPTH = 20
 _VARIABLE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
 
 
+def version_of(tag: str) -> tuple[int, ...] | None:
+    """The version *tag* names, comparable as a tuple, or None if it is no Version Tag."""
+    match = _VERSION_TAG.fullmatch(tag)
+    if match is None:
+        return None
+    parts = tuple(int(part) for part in match.group(1).split("."))
+    return parts + (0,) * (_VERSION_PARTS - len(parts))
+
+
+class RefKind(Enum):
+    """What a Git Source's ref says should be followed, as far as its name tells.
+
+    Pinned Refs (commits) are never Git Sources of a Discovery. Only the
+    remote can tell a branch from a tag, and a ref that is both is a branch:
+    so a Tag Ref that turns out to be a branch is a Floating Ref after all.
+    """
+
+    # A branch, or a tag that is not a Version Tag.
+    FLOATING = "floating"
+    # A Version Tag.
+    TAG = "tag"
+    # No ref: the remote's default branch.
+    UNSET = "unset"
+
+
 @dataclass(frozen=True)
 class GitSource:
     """An `external_components` or remote `packages:` entry that points at git."""
@@ -43,6 +73,12 @@ class GitSource:
     url: str
     # None: the remote's default branch.
     ref: str | None
+
+    @property
+    def kind(self) -> RefKind:
+        if self.ref is None:
+            return RefKind.UNSET
+        return RefKind.FLOATING if version_of(self.ref) is None else RefKind.TAG
 
     @property
     def key(self) -> str:

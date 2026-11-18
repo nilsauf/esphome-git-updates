@@ -31,7 +31,8 @@ class GitRepo:
         return self.latest_commit(branch)
 
     def tag(self, name: str) -> str:
-        self._git("tag", name)
+        """Tag the current commit *name*, moving the tag there if it already exists."""
+        self._git("tag", "--force", name)
         return self.latest_commit("HEAD")
 
     def latest_commit(self, ref: str = "main") -> str:

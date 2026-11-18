@@ -61,7 +61,7 @@ packages:
     refresh: always
 ```
 
-Only Floating Refs (a branch, or no ref) are tracked. Pinned Refs (a tag or commit) never produce an update. See [ADR-0004](docs/adr/0004-require-refresh-always.md) for why a Clean Build is not a substitute.
+Only Floating Refs (a branch, a tag that is not a version such as `stable`, or no ref) are tracked. Version Tags (such as `v1.2.3`) are not followed yet, and Pinned Refs (a commit) never produce an update. See [ADR-0004](docs/adr/0004-require-refresh-always.md) for why a Clean Build is not a substitute.
 
 ## Releasing
 

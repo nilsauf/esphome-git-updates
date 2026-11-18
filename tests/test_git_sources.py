@@ -9,6 +9,7 @@ from custom_components.esphome_git_updates.git_sources import (
     DiscoveryError,
     GitSource,
     OtaStatus,
+    RefKind,
     discover_git_sources,
 )
 
@@ -78,7 +79,6 @@ external_components:
     "ref", ["0123456789abcdef0123456789abcdef01234567", "0123abc"]
 )
 async def test_a_ref_that_is_a_commit_sha_is_pinned_and_ignored(ref: str) -> None:
-    """Tags are Pinned Refs too, but only the remote can tell a tag from a branch."""
     discovery = await _discover(
         f"""
 external_components:
@@ -91,6 +91,40 @@ external_components:
     )
 
     assert discovery.sources == ()
+
+
+@pytest.mark.parametrize(
+    ("ref", "kind"),
+    [
+        ("v1.2.3", RefKind.TAG),
+        ("V1.2", RefKind.TAG),
+        ("1.2.3.4", RefKind.TAG),
+        ("v1.2.0-rc1", RefKind.FLOATING),
+        ("test-foo", RefKind.FLOATING),
+        ("firmware-2024-05", RefKind.FLOATING),
+        ("v1.2.3.4.5", RefKind.FLOATING),
+        ("stable", RefKind.FLOATING),
+        ("main", RefKind.FLOATING),
+    ],
+)
+async def test_a_ref_naming_a_version_tag_is_a_tag_ref_and_any_other_name_floats(
+    ref: str, kind: RefKind
+) -> None:
+    """Only the remote can tell a branch from a tag; a branch is Floating whatever its name."""
+    discovery = await _discover(
+        f"""
+external_components:
+  - source: github://tomquist/marsrelay@{ref}
+"""
+    )
+
+    assert [source.kind for source in discovery.sources] == [kind]
+
+
+async def test_a_source_without_a_ref_is_an_unset_ref() -> None:
+    discovery = await _discover("external_components:\n  - source: github://tomquist/marsrelay\n")
+
+    assert [source.kind for source in discovery.sources] == [RefKind.UNSET]
 
 
 async def test_substitutions_are_applied_to_urls_and_refs() -> None:
