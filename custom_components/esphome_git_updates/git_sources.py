@@ -16,6 +16,8 @@ from typing import Any, NamedTuple
 
 import yaml
 
+from .version_tags import is_version_tag
+
 # Reads one file under the Device Builder's config directory.
 Reader = Callable[[str], Awaitable[str]]
 
@@ -25,11 +27,6 @@ _GITHUB_SHORTHAND = re.compile(r"github://([^/@]+)/([^/@]+)(/[^@]*)?(?:@(.+))?")
 # A ref naming a commit, full or abbreviated: a Pinned Ref.
 _COMMIT_SHA = re.compile(r"[0-9a-f]{7,40}")
 
-# A Version Tag: an optional `v`/`V`, then one to four dot-separated integers.
-_VERSION_TAG = re.compile(r"[vV]?([0-9]+(?:\.[0-9]+){0,3})")
-# Versions are compared padded with zeros to this many parts, so `v1.2` equals `1.2.0`.
-_VERSION_PARTS = 4
-
 # A Refresh Policy of zero time: ESPHome fetches the Source on every build (ADR-0004).
 _ZERO_REFRESH = re.compile(r"0+(\.0+)?\s*[a-z]*")
 
@@ -38,15 +35,6 @@ _MAX_INCLUDE_DEPTH = 20
 
 # ESPHome's substitution syntax: `$name` or `${name}`.
 _VARIABLE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
-
-
-def version_of(tag: str) -> tuple[int, ...] | None:
-    """The version *tag* names, comparable as a tuple, or None if it is no Version Tag."""
-    match = _VERSION_TAG.fullmatch(tag)
-    if match is None:
-        return None
-    parts = tuple(int(part) for part in match.group(1).split("."))
-    return parts + (0,) * (_VERSION_PARTS - len(parts))
 
 
 class RefKind(Enum):
@@ -120,7 +108,7 @@ class GitSource:
     def kind(self) -> RefKind:
         if self.ref is None:
             return RefKind.UNSET
-        return RefKind.FLOATING if version_of(self.ref) is None else RefKind.TAG
+        return RefKind.TAG if is_version_tag(self.ref) else RefKind.FLOATING
 
     @property
     def key(self) -> str:

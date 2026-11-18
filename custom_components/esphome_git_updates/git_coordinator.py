@@ -32,13 +32,13 @@ from .git_sources import (
     RefLocation,
     discover_git_sources,
     rewritten,
-    version_of,
 )
 from .github import Release
 from .install import InstallPlan, YamlRewrite
 from .options import Options
 from .pre_install import PreInstallCheck, PreInstallIssues
 from .releases import GitHubReleases
+from .version_tags import Version, is_version_tag
 from .versions import SourceCommits
 
 _LOGGER = logging.getLogger(__name__)
@@ -88,8 +88,8 @@ class VersionedGitSource:
         if self.releases is None:
             return installed
         followed = [release.tag for release in self.releases] or list(self.version_tags)
-        newest = max(followed, key=_version, default=None)
-        if newest is not None and _version(newest) > _version(installed):
+        newest = max(followed, key=Version.key, default=None)
+        if newest is not None and Version.key(newest) > Version.key(installed):
             return newest
         return installed
 
@@ -100,9 +100,9 @@ class VersionedGitSource:
                 (
                     release
                     for release in self.releases or ()
-                    if _version(installed) < _version(release.tag) <= _version(offered)
+                    if Version.key(installed) < Version.key(release.tag) <= Version.key(offered)
                 ),
-                key=lambda release: _version(release.tag),
+                key=lambda release: Version.key(release.tag),
                 reverse=True,
             )
         )
@@ -434,7 +434,7 @@ async def _ask_remote(source: GitSource) -> GitSourceState:
 
 
 def _version_tags(tags: Mapping[str, str]) -> dict[str, str]:
-    return {tag: commit for tag, commit in tags.items() if version_of(tag) is not None}
+    return {tag: commit for tag, commit in tags.items() if is_version_tag(tag)}
 
 
 def _seed(state: VersionedGitSource) -> str | None:
@@ -445,11 +445,6 @@ def _seed(state: VersionedGitSource) -> str | None:
     if state.releases is None:
         return None
     return state.offered("") or None
-
-
-def _version(tag: str) -> tuple[int, ...]:
-    """*tag*'s version for ordering; a tag that is no Version Tag sorts lowest."""
-    return version_of(tag) or ()
 
 
 def _latest_commits(tracked: Mapping[str, GitSourceState]) -> dict[str, str]:

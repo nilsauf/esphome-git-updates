@@ -15,9 +15,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .git_sources import version_of
 from .github import RELEASES_PER_PAGE, GitHubError, Release, github_repo, releases
 from .options import Options
+from .version_tags import is_version_tag
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -111,4 +111,4 @@ class GitHubReleases:
 
 def _is_release(release: Release) -> bool:
     """A Release is neither a draft nor a prerelease, and its tag is a Version Tag."""
-    return not release.draft and not release.prerelease and version_of(release.tag) is not None
+    return not release.draft and not release.prerelease and is_version_tag(release.tag)
