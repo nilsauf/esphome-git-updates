@@ -30,22 +30,29 @@ def parse_sw_version(sw_version: str | None) -> str | None:
 
 @dataclass(frozen=True)
 class SourceCommits:
-    """A tracked Git Source's Installed and Latest Commit."""
+    """A tracked Git Source's Installed and Latest Commit, or, for a Source following
+    versions, its Installed Tag and the Version Tag it offers."""
 
     name: str
     installed: str | None
     latest: str
     # The commits from installed to latest, for a GitHub Source whose compare succeeded.
     comparison: Comparison | None = None
+    # Whether installed and latest are Version Tags, shown in full, not commits.
+    versions: bool = False
 
     @property
     def changed(self) -> bool:
         return self.installed != self.latest
 
+    def label(self, value: str) -> str:
+        """*value* as shown: a Version Tag in full, a commit shortened."""
+        return value if self.versions else _short(value)
+
     @property
     def commit_change(self) -> str:
-        """`<installed> → <latest>`, short, with the commit count when known."""
-        change = f"{_short(self.installed or '')} → {_short(self.latest)}"
+        """`<installed> → <latest>`, with the commit count when known."""
+        change = f"{self.label(self.installed or '')} → {self.label(self.latest)}"
         if self.comparison is None:
             return change
         count = self.comparison.total_commits
@@ -73,7 +80,7 @@ class Versions:
             return None
         return _composite(
             self.installed_esphome,
-            [(source.name, source.installed or "") for source in self.git_sources],
+            [(source.name, source.label(source.installed or "")) for source in self.git_sources],
         )
 
     @property
@@ -82,7 +89,7 @@ class Versions:
             return None
         return _composite(
             self.available_esphome,
-            [(source.name, source.latest) for source in self.git_sources],
+            [(source.name, source.label(source.latest)) for source in self.git_sources],
         )
 
     @property
@@ -137,10 +144,10 @@ def _source_notes(source: SourceCommits) -> str:
     return f"{source.commit_change}\n\n" + "\n".join(lines)
 
 
-def _composite(esphome: str, commits: list[tuple[str, str]]) -> str:
-    if not commits:
+def _composite(esphome: str, labels: list[tuple[str, str]]) -> str:
+    if not labels:
         return esphome
-    return f"{esphome} ({', '.join(f'{name} {_short(sha)}' for name, sha in commits)})"
+    return f"{esphome} ({', '.join(f'{name} {label}' for name, label in labels)})"
 
 
 def _short(sha: str) -> str:

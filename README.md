@@ -43,7 +43,7 @@ ota:
 
 ### `refresh: always`
 
-ESPHome reuses its cached clone of a Git Source until its Refresh Policy (`refresh`, default `1d`) runs out, so without it an Install can compile the old commit. Every tracked Git Source must set `refresh: always` (or `0s`):
+ESPHome reuses its cached clone of a Git Source until its Refresh Policy (`refresh`, default `1d`) runs out, so without it an Install can compile the old commit. Every Git Source that follows commits must set `refresh: always` (or `0s`); a Tag Ref needs no Refresh Policy:
 
 ```yaml
 external_components:
@@ -61,7 +61,7 @@ packages:
     refresh: always
 ```
 
-Only Floating Refs (a branch, a tag that is not a version such as `stable`, or no ref) are tracked. Version Tags (such as `v1.2.3`) are not followed yet, and Pinned Refs (a commit) never produce an update. See [ADR-0004](docs/adr/0004-require-refresh-always.md) for why a Clean Build is not a substitute.
+Floating Refs (a branch, a tag that is not a version such as `stable`, or no ref) follow their Latest Commit. A Tag Ref (a Version Tag such as `v1.2.3`) follows the highest Version Tag on its remote; Install is refused while such an update is shown, as moving the ref is not supported yet. Pinned Refs (a commit) never produce an update. See [ADR-0004](docs/adr/0004-require-refresh-always.md) for why a Clean Build is not a substitute.
 
 ## Releasing
 

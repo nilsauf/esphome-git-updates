@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -29,25 +30,71 @@ class RemoteRef:
     commit: str
 
 
+@dataclass(frozen=True)
+class RemoteTags:
+    """What a ref points to on a remote, and every tag the remote has."""
+
+    # None: the remote has no branch or tag of that name.
+    ref: RemoteRef | None
+    # Each tag's name (without `refs/tags/`) and the commit it points to.
+    tags: Mapping[str, str]
+
+
+_TAGS = "refs/tags/"
+
+
 async def resolve_ref(url: str, ref: str | None) -> RemoteRef:
     """Ask the remote at *url* what *ref* (None: its default branch) points to."""
-    if url.startswith("-"):
-        # git would read it as an option, such as --upload-pack=<command>.
-        raise GitRemoteError(f"not a git URL: {url}")
+    _check_url(url)
     if ref is None:
         refs = await _ls_remote(url, "HEAD")
         if "HEAD" not in refs:
             raise GitRemoteError(f"{url} has no default branch")
         return RemoteRef(RemoteRefKind.BRANCH, refs["HEAD"])
+    branch, tag = _branch_and_tag(ref)
+    found = _found(await _ls_remote(url, branch, tag), branch, tag)
+    if found is None:
+        raise GitRemoteError(f"{url} has no branch or tag {ref}")
+    return found
+
+
+async def resolve_ref_and_tags(url: str, ref: str) -> RemoteTags:
+    """Ask the remote at *url* what *ref* points to, and list all its tags, in one call."""
+    _check_url(url)
+    branch, tag = _branch_and_tag(ref)
+    refs = await _ls_remote(url, branch, f"{_TAGS}*")
+    tags = {
+        name.removeprefix(_TAGS): _peeled(refs, name)
+        for name in refs
+        if name.startswith(_TAGS) and not name.endswith("^{}")
+    }
+    return RemoteTags(_found(refs, branch, tag), tags)
+
+
+def _check_url(url: str) -> None:
+    if url.startswith("-"):
+        # git would read it as an option, such as --upload-pack=<command>.
+        raise GitRemoteError(f"not a git URL: {url}")
+
+
+def _branch_and_tag(ref: str) -> tuple[str, str]:
     branch = ref if ref.startswith("refs/heads/") else f"refs/heads/{ref}"
-    tag = ref if ref.startswith("refs/tags/") else f"refs/tags/{ref}"
-    refs = await _ls_remote(url, branch, tag)
+    tag = ref if ref.startswith(_TAGS) else f"{_TAGS}{ref}"
+    return branch, tag
+
+
+def _found(refs: Mapping[str, str], branch: str, tag: str) -> RemoteRef | None:
+    """The branch if listed, else the tag, else None: a ref that is both is a branch."""
     if branch in refs:
         return RemoteRef(RemoteRefKind.BRANCH, refs[branch])
     if tag in refs:
-        # An annotated tag is also listed peeled, as the commit it points to.
-        return RemoteRef(RemoteRefKind.TAG, refs.get(f"{tag}^{{}}", refs[tag]))
-    raise GitRemoteError(f"{url} has no branch or tag {ref}")
+        return RemoteRef(RemoteRefKind.TAG, _peeled(refs, tag))
+    return None
+
+
+def _peeled(refs: Mapping[str, str], tag: str) -> str:
+    """An annotated tag is also listed peeled, as the commit it points to."""
+    return refs.get(f"{tag}^{{}}", refs[tag])
 
 
 async def _ls_remote(url: str, *patterns: str) -> dict[str, str]:

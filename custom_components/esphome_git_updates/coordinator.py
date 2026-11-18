@@ -61,6 +61,9 @@ class _StoredData(TypedDict, total=False):
     installed_esphome_version: str
     # Git Source key -> Installed Commit.
     installed_commits: dict[str, str]
+    # Repository URL of a Git Source following versions -> Installed Tag. Keyed
+    # without the ref, so it survives Install rewriting the ref (ADR-0007).
+    installed_tags: dict[str, str]
     # The Install running on the Device Builder, if any (ADR-0002).
     active_install: _StoredInstall
 
@@ -105,6 +108,23 @@ class TrackedConfigStore:
             commits.setdefault(key, sha)
         if commits != recorded:
             self._data["installed_commits"] = commits
+            await self._store.async_save(self._data)
+
+    def installed_tag(self, url: str) -> str | None:
+        """The Installed Tag of the Git Source following versions at *url*, if any."""
+        return self._data.get("installed_tags", {}).get(url)
+
+    async def async_seed_installed_tags(
+        self, tags: Mapping[str, str], present: Collection[str]
+    ) -> None:
+        """Seed Git Sources following versions that have no Installed Tag yet with *tags*
+        (by repository URL), and forget those no longer in the YAML (not in *present*)."""
+        recorded = self._data.get("installed_tags", {})
+        installed = {url: tag for url, tag in recorded.items() if url in present}
+        for url, tag in tags.items():
+            installed.setdefault(url, tag)
+        if installed != recorded:
+            self._data["installed_tags"] = installed
             await self._store.async_save(self._data)
 
     @property

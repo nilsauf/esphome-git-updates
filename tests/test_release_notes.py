@@ -192,3 +192,50 @@ async def test_a_remote_not_on_github_shows_the_sha_change_without_asking_github
             f"### marsrelay\n{installed[:7]} → {latest[:7]}"
         )
     assert fake_github.authorizations == []
+
+
+async def test_a_tag_ref_on_github_lists_the_commits_between_the_two_tags(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    fake_github: FakeGitHub,
+    marsrelay: GitRepo,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    marsrelay.tag("v1.4.0")
+    fix = marsrelay.push(message="Fix debounce")
+    marsrelay.tag("v1.5.0")
+    # Past the followed tag: not part of the notes.
+    marsrelay.push(message="Unreleased work")
+    builder.files[CONFIGURATION] = (
+        f"esphome:\n  name: host-node\n{OTA}external_components:\n"
+        f"  - source:\n      type: git\n      url: {GITHUB_URL}\n      ref: v1.4.0\n"
+    )
+
+    await set_up(hass, builder)
+
+    assert _summary(hass) == "marsrelay v1.4.0 → v1.5.0 (1 commit)"
+    commit_url = "https://github.com/nilsauf/marsrelay/commit/"
+    assert await _release_notes(hass, hass_ws_client) == (
+        "### marsrelay\nv1.4.0 → v1.5.0 (1 commit)\n\n"
+        f"- [`{fix[:7]}`]({commit_url}{fix}) Fix debounce"
+    )
+
+
+async def test_a_tag_ref_off_github_shows_only_the_version_change(
+    hass: HomeAssistant,
+    fake_github: FakeGitHub,
+    marsrelay: GitRepo,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    marsrelay.tag("v1.4.0")
+    marsrelay.push()
+    marsrelay.tag("v1.5.0")
+    async for builder in _builder(marsrelay.url):
+        builder.files[CONFIGURATION] = (
+            f"esphome:\n  name: host-node\n{OTA}external_components:\n"
+            f"  - source:\n      type: git\n      url: {marsrelay.url}\n      ref: v1.4.0\n"
+        )
+        await set_up(hass, builder)
+
+        assert await _release_notes(hass, hass_ws_client) == "### marsrelay\nv1.4.0 → v1.5.0"
+    assert fake_github.authorizations == []

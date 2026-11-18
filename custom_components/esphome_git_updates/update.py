@@ -30,7 +30,7 @@ from .git_coordinator import GitSourcesCoordinator
 from .install import ActiveInstall, Installed, InstallEnding, InstallPlan, InstallRunner
 from .linked_device import LinkedDevice
 from .options import Options
-from .versions import SourceCommits, Versions
+from .versions import Versions
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -146,15 +146,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         return Versions(
             installed_esphome=self._installed_esphome(),
             available_esphome=self.coordinator.data,
-            git_sources=tuple(
-                SourceCommits(
-                    tracked.source.name,
-                    installed := self._store.installed_commit(key),
-                    tracked.latest_commit,
-                    self._git.comparisons.get(key, installed, tracked.latest_commit),
-                )
-                for key, tracked in (self._git.data or {}).items()
-            ),
+            git_sources=self._git.shown_sources(),
         )
 
     def version_is_newer(self, latest_version: str, installed_version: str) -> bool:

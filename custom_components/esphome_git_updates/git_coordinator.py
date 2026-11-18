@@ -1,10 +1,11 @@
-"""Discover a Tracked Config's Git Sources and poll their Latest Commits."""
+"""Discover a Tracked Config's Git Sources and poll their Latest Commits and Version Tags."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
@@ -16,7 +17,12 @@ from .connection import DeviceBuilderSession, DeviceBuilderUnavailable, Protocol
 from .const import CONF_CONFIGURATION, DOMAIN
 from .coordinator import EsphomeGitUpdatesConfigEntry, TrackedConfigStore
 from .device_builder import CommandFailed, DeviceBuilderClient
-from .git_remote import GitRemoteError, RemoteRef, RemoteRefKind, resolve_ref
+from .git_remote import (
+    GitRemoteError,
+    RemoteRefKind,
+    resolve_ref,
+    resolve_ref_and_tags,
+)
 from .git_sources import (
     Discovery,
     DiscoveryError,
@@ -24,9 +30,11 @@ from .git_sources import (
     Reader,
     RefKind,
     discover_git_sources,
+    version_of,
 )
 from .options import Options
 from .pre_install import PreInstallCheck, PreInstallIssues
+from .versions import SourceCommits
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,10 +44,40 @@ _POLLER = "git"
 
 @dataclass(frozen=True)
 class TrackedGitSource:
-    """A Git Source on a Floating Ref or Unset Ref, with the Latest Commit last seen on its remote."""
+    """A Git Source following Latest Commit (a Floating Ref or Unset Ref), with the
+    Latest Commit last seen on its remote."""
 
     source: GitSource
     latest_commit: str
+
+    @property
+    def key(self) -> str:
+        return self.source.key
+
+
+@dataclass(frozen=True)
+class VersionedGitSource:
+    """A Git Source following versions (a Tag Ref), with the Version Tags last seen on
+    its remote."""
+
+    source: GitSource
+    # Each Version Tag on the remote, with the commit it points to.
+    version_tags: Mapping[str, str]
+
+    @property
+    def key(self) -> str:
+        """Its repository, not its ref: an Install rewrites the ref (ADR-0007)."""
+        return self.source.url
+
+    def offered(self, installed: str) -> str:
+        """The newest Version Tag if strictly newer than *installed*, else *installed*."""
+        newest = max(self.version_tags, key=_version, default=None)
+        if newest is not None and _version(newest) > _version(installed):
+            return newest
+        return installed
+
+
+type GitSourceState = TrackedGitSource | VersionedGitSource
 
 
 class _ReadRefused(Exception):
@@ -55,16 +93,17 @@ class _ReadRefused(Exception):
         self.details = f"{err.error_code}: {err.details}"
 
 
-class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
-    """Polls Git Sources; its data maps each tracked Source's key to the Source and its
-    Latest Commit.
+class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
+    """Polls Git Sources; its data maps each tracked Source's key to what its remote
+    was last seen to hold.
 
     Each poll reads the Tracked Config and every file it includes over `/ws`
     (ADR-0006), then asks every remote with `git ls-remote`. A remote that
-    cannot be asked keeps its last known Latest Commit. Newly seen Sources
-    are seeded with their Latest Commit, so they show no update until the
-    next push (ADR-0003). Each changed Git Source on GitHub is then
-    compared over GitHub's API, for release notes only.
+    cannot be asked keeps what was last known of it. Newly seen Sources
+    following Latest Commit are seeded with it, so they show no update until
+    the next push (ADR-0003); Tag Refs are seeded with the tag the YAML names.
+    Each changed Git Source on GitHub is then compared over GitHub's API, for
+    release notes only.
     """
 
     config_entry: EsphomeGitUpdatesConfigEntry
@@ -92,42 +131,53 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
         self._pre_install_check: PreInstallCheck | None = None
         self.comparisons = GitHubComparisons(hass, entry)
 
-    async def _async_update_data(self) -> dict[str, TrackedGitSource]:
+    async def _async_update_data(self) -> dict[str, GitSourceState]:
         discovery = await self._discover()
         self._log_untrackable(discovery.untrackable)
         previous = self.data or {}
         results = await asyncio.gather(
-            *(resolve_ref(source.url, source.ref) for source in discovery.sources),
+            *(_ask_remote(source) for source in discovery.sources),
             return_exceptions=True,
         )
-        tracked: dict[str, TrackedGitSource] = {}
+        tracked: dict[str, GitSourceState] = {}
         for source, result in zip(discovery.sources, results, strict=True):
             if isinstance(result, GitRemoteError):
                 self._log_failure(source, result)
-                if source.key in previous:
-                    tracked[source.key] = TrackedGitSource(
-                        source, previous[source.key].latest_commit
-                    )
+                kept = previous.get(source.key) or previous.get(source.url)
+                if kept is not None:
+                    tracked[kept.key] = replace(kept, source=source)
                 continue
             if isinstance(result, BaseException):
                 raise result
             self._log_recovery(source)
-            if _is_floating(source, result):
-                tracked[source.key] = TrackedGitSource(source, result.commit)
+            tracked[result.key] = result
         await self._store.async_seed_installed_commits(
             _latest_commits(tracked), {source.key for source in discovery.sources}
+        )
+        await self._store.async_seed_installed_tags(
+            {
+                state.key: state.source.ref
+                for state in tracked.values()
+                if isinstance(state, VersionedGitSource) and state.source.ref is not None
+            },
+            {source.url for source in discovery.sources if source.kind is RefKind.TAG},
         )
         self._check(discovery, tracked)
         await self.comparisons.async_update(self._changes(tracked))
         return tracked
 
-    def _check(self, discovery: Discovery, tracked: dict[str, TrackedGitSource]) -> None:
+    def _check(self, discovery: Discovery, tracked: dict[str, GitSourceState]) -> None:
         """Check the YAML just read for an Install, and raise or clear its Repair issues."""
+        following_commits = _latest_commits(tracked)
         self._pre_install_check = PreInstallCheck(
             ota=discovery.ota,
-            # A Pinned Ref never moves, so its Refresh Policy does not matter.
+            # Only a Source following Latest Commit can be built from a stale
+            # clone: a Pinned Ref never moves, and a changed tag is a new
+            # `url@ref` in ESPHome's clone cache (ADR-0004).
             wrong_refresh_policy=tuple(
-                source for source in discovery.wrong_refresh_policy if source.key in tracked
+                source
+                for source in discovery.wrong_refresh_policy
+                if source.key in following_commits
             ),
         )
         self._pre_install_issues.report(self._pre_install_check)
@@ -147,6 +197,17 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
             )
         if (refusal := check.refusal(title)) is not None:
             raise HomeAssistantError(refusal)
+        # Until an Install can rewrite the ref, it would build the old tag.
+        outdated = [
+            f"{source.name} {source.commit_change}"
+            for source in self.shown_sources()
+            if source.versions and source.changed
+        ]
+        if outdated:
+            raise HomeAssistantError(
+                f"Install of {title} refused: moving a Tag Ref to a newer Version Tag "
+                f"is not supported yet ({'; '.join(outdated)})"
+            )
 
     async def async_set_poll_interval(self, interval: timedelta) -> None:
         """Poll every *interval* from now on, starting with a poll right away.
@@ -164,18 +225,52 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
         if await self.comparisons.async_update(self._changes(self.data or {})):
             self.async_update_listeners()
 
-    def _changes(self, tracked: dict[str, TrackedGitSource]) -> list[SourceChange]:
-        """The tracked Sources whose Latest Commit differs from a known Installed Commit."""
+    def shown_sources(self) -> tuple[SourceCommits, ...]:
+        """Each tracked Git Source, installed against latest, as the entity shows it."""
+        return tuple(self._shown(state) for state in (self.data or {}).values())
+
+    def _shown(self, state: GitSourceState) -> SourceCommits:
+        if isinstance(state, TrackedGitSource):
+            installed = self._store.installed_commit(state.key)
+            latest = state.latest_commit
+            return SourceCommits(
+                state.source.name,
+                installed,
+                latest,
+                self.comparisons.get(state.key, installed, latest),
+            )
+        installed, offered = self._installed_and_offered(state)
+        installed_commit = state.version_tags.get(installed)
+        offered_commit = state.version_tags.get(offered)
+        comparison = (
+            None
+            if offered_commit is None
+            else self.comparisons.get(state.key, installed_commit, offered_commit)
+        )
+        return SourceCommits(state.source.name, installed, offered, comparison, versions=True)
+
+    def _installed_and_offered(self, state: VersionedGitSource) -> tuple[str, str]:
+        """The Installed Tag (until seeded, the one the YAML names) and the one offered."""
+        installed = self._store.installed_tag(state.key) or state.source.ref or ""
+        return installed, state.offered(installed)
+
+    def _changes(self, tracked: Mapping[str, GitSourceState]) -> list[SourceChange]:
+        """The tracked Sources with an update whose two commits are known."""
         changes = []
-        for key, tracked_source in tracked.items():
-            installed = self._store.installed_commit(key)
-            latest = tracked_source.latest_commit
-            if installed is not None and installed != latest:
-                changes.append(SourceChange(key, tracked_source.source.url, installed, latest))
+        for key, state in tracked.items():
+            if isinstance(state, TrackedGitSource):
+                installed = self._store.installed_commit(key)
+                latest: str | None = state.latest_commit
+            else:
+                installed_tag, offered_tag = self._installed_and_offered(state)
+                installed = state.version_tags.get(installed_tag)
+                latest = state.version_tags.get(offered_tag)
+            if installed is not None and latest is not None and installed != latest:
+                changes.append(SourceChange(key, state.source.url, installed, latest))
         return changes
 
     def latest_commits(self) -> dict[str, str]:
-        """The Latest Commit last seen of each tracked Git Source, by key."""
+        """The Latest Commit last seen of each Git Source following Latest Commit, by key."""
         return _latest_commits(self.data or {})
 
     async def _discover(self) -> Discovery:
@@ -226,16 +321,35 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, TrackedGitSource]]):
         self._failing.discard(source.key)
 
 
-def _latest_commits(tracked: dict[str, TrackedGitSource]) -> dict[str, str]:
-    return {key: tracked_source.latest_commit for key, tracked_source in tracked.items()}
+async def _ask_remote(source: GitSource) -> GitSourceState:
+    """What *source*'s remote holds of what the Source follows.
 
-
-def _is_floating(source: GitSource, ref: RemoteRef) -> bool:
-    """Only Floating Refs are tracked: a branch, or a tag that is not a Version Tag.
-
-    Tag Refs are not followed yet.
+    A Tag Ref follows the remote's Version Tags; but only the remote can tell
+    a branch from a tag, and a Tag Ref that is a branch follows its Latest
+    Commit, as a Floating Ref does.
     """
-    return ref.kind is RemoteRefKind.BRANCH or source.kind is not RefKind.TAG
+    if source.kind is not RefKind.TAG or source.ref is None:
+        return TrackedGitSource(source, (await resolve_ref(source.url, source.ref)).commit)
+    remote = await resolve_ref_and_tags(source.url, source.ref)
+    if remote.ref is not None and remote.ref.kind is RemoteRefKind.BRANCH:
+        return TrackedGitSource(source, remote.ref.commit)
+    return VersionedGitSource(
+        source,
+        {tag: commit for tag, commit in remote.tags.items() if version_of(tag) is not None},
+    )
+
+
+def _version(tag: str) -> tuple[int, ...]:
+    """*tag*'s version for ordering; a tag that is no Version Tag sorts lowest."""
+    return version_of(tag) or ()
+
+
+def _latest_commits(tracked: Mapping[str, GitSourceState]) -> dict[str, str]:
+    return {
+        key: state.latest_commit
+        for key, state in tracked.items()
+        if isinstance(state, TrackedGitSource)
+    }
 
 
 def _reader(client: DeviceBuilderClient, configuration: str) -> Reader:
