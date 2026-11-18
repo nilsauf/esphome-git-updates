@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from custom_components.esphome_git_updates.github import Commit, Comparison
-from custom_components.esphome_git_updates.versions import SourceCommits, Versions, parse_sw_version
+from custom_components.esphome_git_updates.versions import ShownSource, Versions, parse_sw_version
 
 OLD = "abc1234aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 NEW = "def5678bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -17,8 +17,8 @@ def test_the_composite_version_is_the_esphome_version_and_each_sources_short_sha
         installed_esphome="2026.10.1",
         available_esphome="2026.10.2",
         git_sources=(
-            SourceCommits("marsrelay", installed=OLD, latest=NEW),
-            SourceCommits("sensors", installed=SENSORS, latest=SENSORS),
+            ShownSource("marsrelay", installed=OLD, latest=NEW),
+            ShownSource("sensors", installed=SENSORS, latest=SENSORS),
         ),
     )
 
@@ -34,7 +34,7 @@ def test_without_git_sources_the_version_is_the_esphome_version() -> None:
 
 
 def test_an_unknown_installed_esphome_version_makes_the_installed_version_unknown() -> None:
-    versions = Versions(None, "2026.10.1", (SourceCommits("marsrelay", OLD, OLD),))
+    versions = Versions(None, "2026.10.1", (ShownSource("marsrelay", OLD, OLD),))
 
     assert versions.installed is None
     assert versions.latest == "2026.10.1 (marsrelay abc1234)"
@@ -45,8 +45,8 @@ def test_the_release_summary_has_one_line_per_changed_source() -> None:
         "2026.10.1",
         "2026.10.2",
         (
-            SourceCommits("marsrelay", OLD, NEW),
-            SourceCommits("sensors", SENSORS, SENSORS),
+            ShownSource("marsrelay", OLD, NEW),
+            ShownSource("sensors", SENSORS, SENSORS),
         ),
     )
 
@@ -54,7 +54,7 @@ def test_the_release_summary_has_one_line_per_changed_source() -> None:
 
 
 def test_a_changed_git_source_alone_is_summarised_without_esphome() -> None:
-    versions = Versions("2026.10.1", "2026.10.1", (SourceCommits("marsrelay", OLD, NEW),))
+    versions = Versions("2026.10.1", "2026.10.1", (ShownSource("marsrelay", OLD, NEW),))
 
     assert versions.release_summary == "marsrelay abc1234 → def5678"
 
@@ -78,8 +78,8 @@ def test_a_compared_github_source_is_summarised_with_its_commit_count() -> None:
         "2026.10.1",
         "2026.10.1",
         (
-            SourceCommits("marsrelay", OLD, NEW, THREE),
-            SourceCommits("sensors", SENSORS, NEW, Comparison(1, (_commit(NEW, "One"),))),
+            ShownSource("marsrelay", OLD, NEW, THREE),
+            ShownSource("sensors", SENSORS, NEW, Comparison(1, (_commit(NEW, "One"),))),
         ),
     )
 
@@ -89,7 +89,7 @@ def test_a_compared_github_source_is_summarised_with_its_commit_count() -> None:
 
 
 def test_the_release_notes_list_a_github_sources_commits_after_the_esphome_change() -> None:
-    versions = Versions("2026.10.1", "2026.10.2", (SourceCommits("marsrelay", OLD, NEW, THREE),))
+    versions = Versions("2026.10.1", "2026.10.2", (ShownSource("marsrelay", OLD, NEW, THREE),))
 
     assert versions.release_notes == (
         "### ESPHome\n"
@@ -107,20 +107,20 @@ def test_the_release_notes_list_a_github_sources_commits_after_the_esphome_chang
 
 
 def test_the_release_notes_show_only_the_sha_change_of_an_uncompared_source() -> None:
-    versions = Versions("2026.10.1", "2026.10.1", (SourceCommits("marsrelay", OLD, NEW),))
+    versions = Versions("2026.10.1", "2026.10.1", (ShownSource("marsrelay", OLD, NEW),))
 
     assert versions.release_notes == "### marsrelay\nabc1234 → def5678"
 
 
 def test_the_release_notes_show_only_the_latest_commit_when_the_installed_one_is_unknown() -> None:
-    versions = Versions("2026.10.1", "2026.10.1", (SourceCommits("marsrelay", None, NEW),))
+    versions = Versions("2026.10.1", "2026.10.1", (ShownSource("marsrelay", None, NEW),))
 
     assert versions.release_notes == "### marsrelay\nLatest commit def5678"
 
 
 def test_unchanged_sources_have_no_release_notes() -> None:
     versions = Versions(
-        "2026.10.1", "2026.10.1", (SourceCommits("marsrelay", OLD, OLD), SourceCommits("s", NEW, NEW))
+        "2026.10.1", "2026.10.1", (ShownSource("marsrelay", OLD, OLD), ShownSource("s", NEW, NEW))
     )
 
     assert versions.release_notes is None
@@ -128,7 +128,7 @@ def test_unchanged_sources_have_no_release_notes() -> None:
 
 def test_commits_github_did_not_list_are_counted_at_the_end() -> None:
     comparison = Comparison(300, (_commit(NEW, "First listed"),))
-    versions = Versions("2026.10.1", "2026.10.1", (SourceCommits("marsrelay", OLD, NEW, comparison),))
+    versions = Versions("2026.10.1", "2026.10.1", (ShownSource("marsrelay", OLD, NEW, comparison),))
 
     assert versions.release_notes is not None
     assert versions.release_notes.endswith(") First listed\n- … and 299 more")

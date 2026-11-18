@@ -29,9 +29,9 @@ def parse_sw_version(sw_version: str | None) -> str | None:
 
 
 @dataclass(frozen=True)
-class SourceCommits:
-    """A tracked Git Source's Installed and Latest Commit, or, for a Source following
-    versions, its Installed Tag and the Version Tag it offers."""
+class ShownSource:
+    """A tracked Git Source as the entity shows it: its Installed and Latest Commit, or,
+    for a Source following versions, its Installed Tag and the Version Tag it offers."""
 
     name: str
     installed: str | None
@@ -71,7 +71,7 @@ class Versions:
 
     installed_esphome: str | None
     available_esphome: str | None
-    git_sources: tuple[SourceCommits, ...]
+    git_sources: tuple[ShownSource, ...]
 
     @property
     def installed(self) -> str | None:
@@ -132,7 +132,7 @@ class Versions:
         return "\n\n".join(sections) or None
 
 
-def _source_notes(source: SourceCommits) -> str:
+def _source_notes(source: ShownSource) -> str:
     if source.installed is None:
         return f"Latest commit {_short(source.latest)}"
     if source.releases:
