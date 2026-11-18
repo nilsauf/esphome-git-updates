@@ -115,7 +115,56 @@ async def test_a_number_like_ref_keeps_its_text(written: str) -> None:
     [source] = discovery.sources
     assert source.ref == written
     assert source.written_at is not None
-    assert rewritten(main, [(source.written_at, "1.11")]) == main.replace(written, "1.11")
+    assert rewritten(main, [(source.written_at, "v1.11")]) == main.replace(written, "v1.11")
+
+
+@pytest.mark.parametrize(
+    ("written", "tag", "expected"),
+    [
+        ("1.9", "1.10", '"1.10"'),
+        ("2024.9", "2024.10", '"2024.10"'),
+        ("2", "3", '"3"'),
+        ("'1.9'", "1.10", "'1.10'"),
+        ('"1.9"', "1.10", '"1.10"'),
+    ],
+)
+async def test_a_plain_ref_moved_to_a_tag_yaml_reads_as_a_number_is_quoted(
+    written: str, tag: str, expected: str
+) -> None:
+    """Else ESPHome would build `1.1` while the store records `1.10`."""
+    main = f"""external_components:
+  - source:
+      type: git
+      url: https://gitlab.com/someone/sensors
+      ref: {written}  # pinned
+"""
+
+    moved = await _moved(tag, main)
+
+    assert moved == {"node.yaml": main.replace(f"ref: {written}", f"ref: {expected}")}
+
+
+async def test_a_plain_substitution_moved_to_a_tag_yaml_reads_as_a_number_is_quoted() -> None:
+    main = """substitutions:
+  fw_ver: 1.9
+external_components:
+  - source:
+      type: git
+      url: https://gitlab.com/someone/sensors
+      ref: ${fw_ver}
+"""
+
+    moved = await _moved("1.10", main)
+
+    assert moved == {"node.yaml": main.replace("fw_ver: 1.9", 'fw_ver: "1.10"')}
+
+
+async def test_the_shorthands_tag_is_never_quoted() -> None:
+    main = "external_components:\n  - source: github://someone/sensors@1.9\n"
+
+    moved = await _moved("1.10", main)
+
+    assert moved == {"node.yaml": main.replace("@1.9", "@1.10")}
 
 
 @pytest.mark.parametrize("used", ["${fw_ver}", "$fw_ver"])

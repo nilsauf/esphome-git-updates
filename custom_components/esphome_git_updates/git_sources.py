@@ -78,6 +78,9 @@ class RefLocation:
     end: int
     # What an inserted ref is written after: a new `ref:` line, or a shorthand's `@`.
     prefix: str = ""
+    # Whether the span is a whole unquoted YAML scalar, which a tag is written to
+    # quoted if YAML would read it as something else, such as the number `1.10`.
+    plain: bool = False
 
 
 def rewritten(text: str, refs: Iterable[tuple[RefLocation, str]]) -> str:
@@ -86,7 +89,7 @@ def rewritten(text: str, refs: Iterable[tuple[RefLocation, str]]) -> str:
     Each location must be one found in *text*, read from that location's file.
     """
     for location, tag in sorted(refs, key=lambda edit: edit[0].start, reverse=True):
-        written = _scalar(tag) if location.prefix.endswith(_REF_KEY) else tag
+        written = _scalar(tag) if location.plain else tag
         text = text[: location.start] + location.prefix + written + text[location.end :]
     return text
 
@@ -228,11 +231,13 @@ class _Loader(yaml.SafeLoader):
         text = self.buffer.rstrip("\0")
         end = text.find("\n", index)
         if end == -1:
-            return RefLocation(self.path, len(text), len(text), f"\n{' ' * indent}{_REF_KEY}")
+            return RefLocation(
+                self.path, len(text), len(text), f"\n{' ' * indent}{_REF_KEY}", plain=True
+            )
         newline = "\n"
         if end > 0 and text[end - 1] == "\r":
             end, newline = end - 1, "\r\n"
-        return RefLocation(self.path, end, end, f"{newline}{' ' * indent}{_REF_KEY}")
+        return RefLocation(self.path, end, end, f"{newline}{' ' * indent}{_REF_KEY}", plain=True)
 
 
 def _construct_str(loader: _Loader, node: yaml.ScalarNode) -> str:
@@ -246,7 +251,7 @@ def _construct_str(loader: _Loader, node: yaml.ScalarNode) -> str:
     if node.style not in (None, "'", '"') or loader.buffer[start:end] != value:
         return value
     written = _Written(value)
-    written.location = RefLocation(loader.path, start, end)
+    written.location = RefLocation(loader.path, start, end, plain=node.style is None)
     return written
 
 
