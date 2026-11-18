@@ -72,9 +72,12 @@ class RefLocation:
 
     # The file, as the reader names it.
     file: str
-    # The span of the ref's text in that file, quotes excluded.
+    # The span of the ref's text in that file, quotes excluded; empty where an
+    # Unset Ref has no ref yet, and one is inserted.
     start: int
     end: int
+    # What an inserted ref is written after: a new `ref:` line, or a shorthand's `@`.
+    prefix: str = ""
 
 
 def rewritten(text: str, refs: Iterable[tuple[RefLocation, str]]) -> str:
@@ -83,8 +86,18 @@ def rewritten(text: str, refs: Iterable[tuple[RefLocation, str]]) -> str:
     Each location must be one found in *text*, read from that location's file.
     """
     for location, tag in sorted(refs, key=lambda edit: edit[0].start, reverse=True):
-        text = text[: location.start] + tag + text[location.end :]
+        written = _scalar(tag) if location.prefix.endswith(_REF_KEY) else tag
+        text = text[: location.start] + location.prefix + written + text[location.end :]
     return text
+
+
+# The key an inserted ref line starts with.
+_REF_KEY = "ref: "
+
+
+def _scalar(tag: str) -> str:
+    """*tag* as a YAML scalar that reads back as that string: `1.10` is a number unquoted."""
+    return tag if yaml.safe_load(tag) == tag else f'"{tag}"'
 
 
 @dataclass(frozen=True)
@@ -173,6 +186,10 @@ class _Written(str):
     """A string scalar as written in a file, with where it is written."""
 
     location: RefLocation
+    # For a `url:` key: where a `ref:` line would be inserted after its entry,
+    # and whether its mapping is flow-style, where none can be inserted safely.
+    ref_insertion: RefLocation | None = None
+    in_flow_style: bool = False
 
 
 class _FromVars(str):
@@ -193,6 +210,29 @@ class _Loader(yaml.SafeLoader):
             if key_node.tag == "tag:yaml.org,2002:merge" and value_node.tag == "!include":
                 key_node.tag = "tag:yaml.org,2002:str"
         super().flatten_mapping(node)
+
+    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Any, Any]:
+        mapping = super().construct_mapping(node, deep)
+        for key_node, value_node in node.value:
+            key = self.constructed_objects.get(key_node)
+            if key == "url" and isinstance(key, _Written):
+                key.in_flow_style = bool(node.flow_style)
+                if not node.flow_style and value_node.end_mark.line == key_node.start_mark.line:
+                    key.ref_insertion = self._line_after(
+                        value_node.end_mark.index, key_node.start_mark.column
+                    )
+        return mapping
+
+    def _line_after(self, index: int, indent: int) -> RefLocation:
+        """Where a `ref:` line indented by *indent* goes after the line holding *index*."""
+        text = self.buffer.rstrip("\0")
+        end = text.find("\n", index)
+        if end == -1:
+            return RefLocation(self.path, len(text), len(text), f"\n{' ' * indent}{_REF_KEY}")
+        newline = "\n"
+        if end > 0 and text[end - 1] == "\r":
+            end, newline = end - 1, "\r\n"
+        return RefLocation(self.path, end, end, f"{newline}{' ' * indent}{_REF_KEY}")
 
 
 def _construct_str(loader: _Loader, node: yaml.ScalarNode) -> str:
@@ -261,12 +301,20 @@ async def discover_git_sources(configuration: str, read: Reader) -> Discovery:
             )
             continue
         source = _parse_source(value)
+        if source is not None and source.ref is None and _in_flow_style(value):
+            untrackable.append(
+                f"{candidate.where} source {source.url} is a flow-style mapping, where "
+                "no ref can be inserted, so it cannot follow versions; it follows its "
+                "Latest Commit"
+            )
         if source is not None and not _is_pinned_to_a_commit(source):
             parsed.append((candidate, source))
     refs = _refs_by_repository(source for _candidate, source in parsed)
     uses = _variable_uses(config)
     sources: list[GitSource] = []
     stale: set[str] = set()
+    # Repositories of Unset Refs that cannot follow versions, noted once each.
+    shared: set[str] = set()
     for candidate, source in parsed:
         if source.kind is RefKind.TAG:
             location, reason = _locate_tag_ref(candidate, source, refs, uses, gathered)
@@ -276,6 +324,19 @@ async def discover_git_sources(configuration: str, read: Reader) -> Discovery:
                 )
                 continue
             source = replace(source, written_at=location)
+        elif (
+            source.kind is RefKind.UNSET
+            and source.written_at is not None
+            and len(refs[source.url]) > 1
+        ):
+            # A ref inserted in one place only would leave the repository at two refs.
+            if source.url not in shared:
+                untrackable.append(
+                    f"{candidate.where} source {source.name} is referred to in several "
+                    "places, so it cannot follow versions; it follows its Latest Commit"
+                )
+                shared.add(source.url)
+            source = replace(source, written_at=None)
         sources.append(source)
         if not _refreshes_always(_substitute(candidate.refresh, gathered.substitutions)):
             stale.add(source.key)
@@ -582,12 +643,35 @@ def _parse_source(value: Any) -> GitSource | None:
         if match is None:
             return None
         owner, repo, _path, ref = match.groups()
-        return GitSource(repo, f"https://github.com/{owner}/{repo}.git", ref)
+        appended = (
+            RefLocation(value.location.file, value.location.end, value.location.end, "@")
+            if ref is None and isinstance(value, _Written)
+            else None
+        )
+        return GitSource(repo, f"https://github.com/{owner}/{repo}.git", ref, appended)
     if isinstance(value, dict) and value.get("type") == "git":
         url = str(value["url"])
         ref = value.get("ref")
-        return GitSource(_repo_name(url), url, None if ref is None else str(ref))
+        if ref is not None:
+            location = ref.location if isinstance(ref, _Written) else None
+        elif "ref" in value:
+            # An empty `ref:`; a second one must not be inserted.
+            location = None
+        else:
+            location = _url_key(value).ref_insertion
+        return GitSource(_repo_name(url), url, None if ref is None else str(ref), location)
     return None
+
+
+def _url_key(source: dict[Any, Any]) -> _Written:
+    """The `url` key of *source* as written, or a stand-in that is located nowhere."""
+    key = next(key for key in source if key == "url")
+    return key if isinstance(key, _Written) else _Written(key)
+
+
+def _in_flow_style(source: Any) -> bool:
+    """Whether *source* is a mapping written flow-style, such as `{type: git, url: ...}`."""
+    return isinstance(source, dict) and "url" in source and _url_key(source).in_flow_style
 
 
 def _is_pinned_to_a_commit(source: GitSource) -> bool:

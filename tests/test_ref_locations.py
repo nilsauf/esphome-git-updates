@@ -282,3 +282,25 @@ external_components:
     assert discovery.sources == ()
     assert len(discovery.untrackable) == 2
     assert all("written in several places" in reason for reason in discovery.untrackable)
+
+
+@pytest.mark.parametrize("other", ["github://someone/sensors", "github://someone/sensors@main"])
+async def test_an_unset_ref_whose_repository_is_referred_to_twice_follows_commits(
+    other: str,
+) -> None:
+    """A ref inserted in one place only would leave the repository at two refs."""
+    discovery = await _discover(
+        {
+            "node.yaml": f"""packages:
+  sensors: github://someone/sensors/sensors.yaml
+external_components:
+  - source: {other}
+"""
+        }
+    )
+
+    unset = [source for source in discovery.sources if source.ref is None]
+    assert unset != []
+    assert all(source.written_at is None for source in unset)
+    [reason] = discovery.untrackable
+    assert "referred to in several places" in reason

@@ -58,17 +58,25 @@ async def resolve_ref(url: str, ref: str | None) -> RemoteRef:
     return found
 
 
-async def resolve_ref_and_tags(url: str, ref: str) -> RemoteTags:
-    """Ask the remote at *url* what *ref* points to, and list all its tags, in one call."""
+async def resolve_ref_and_tags(url: str, ref: str | None) -> RemoteTags:
+    """Ask the remote at *url* what *ref* (None: its default branch) points to, and
+    list all its tags, in one call."""
     _check_url(url)
-    branch, tag = _branch_and_tag(ref)
-    refs = await _ls_remote(url, branch, f"{_TAGS}*")
+    if ref is None:
+        refs = await _ls_remote(url, "HEAD", f"{_TAGS}*")
+        if "HEAD" not in refs:
+            raise GitRemoteError(f"{url} has no default branch")
+        found: RemoteRef | None = RemoteRef(RemoteRefKind.BRANCH, refs["HEAD"])
+    else:
+        branch, tag = _branch_and_tag(ref)
+        refs = await _ls_remote(url, branch, f"{_TAGS}*")
+        found = _found(refs, branch, tag)
     tags = {
         name.removeprefix(_TAGS): _peeled(refs, name)
         for name in refs
         if name.startswith(_TAGS) and not name.endswith("^{}")
     }
-    return RemoteTags(_found(refs, branch, tag), tags)
+    return RemoteTags(found, tags)
 
 
 def _check_url(url: str) -> None:
