@@ -29,9 +29,12 @@ from .git_sources import (
     GitSource,
     Reader,
     RefKind,
+    RefLocation,
     discover_git_sources,
+    rewritten,
     version_of,
 )
+from .install import InstallPlan, YamlRewrite
 from .options import Options
 from .pre_install import PreInstallCheck, PreInstallIssues
 from .versions import SourceCommits
@@ -129,10 +132,12 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
         self._pre_install_issues = PreInstallIssues(hass, entry)
         # What the YAML said at the last successful poll.
         self._pre_install_check: PreInstallCheck | None = None
+        # The text of each file read at the last successful poll, by path.
+        self._files: Mapping[str, str] = {}
         self.comparisons = GitHubComparisons(hass, entry)
 
     async def _async_update_data(self) -> dict[str, GitSourceState]:
-        discovery = await self._discover()
+        discovery, files = await self._discover()
         self._log_untrackable(discovery.untrackable)
         previous = self.data or {}
         results = await asyncio.gather(
@@ -164,6 +169,7 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
         )
         self._check(discovery, tracked)
         await self.comparisons.async_update(self._changes(tracked))
+        self._files = files
         return tracked
 
     def _check(self, discovery: Discovery, tracked: dict[str, GitSourceState]) -> None:
@@ -197,17 +203,55 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
             )
         if (refusal := check.refusal(title)) is not None:
             raise HomeAssistantError(refusal)
-        # Until an Install can rewrite the ref, it would build the old tag.
-        outdated = [
-            f"{source.name} {source.commit_change}"
-            for source in self.shown_sources()
-            if source.versions and source.changed
+        # It would build the old version and record the new one.
+        unwritable = [
+            f"{state.source.name} {state.source.ref} → {tag}"
+            for state, tag, location in self._moves()
+            if location is None
         ]
-        if outdated:
+        if unwritable:
             raise HomeAssistantError(
-                f"Install of {title} refused: moving a Tag Ref to a newer Version Tag "
-                f"is not supported yet ({'; '.join(outdated)})"
+                f"Install of {title} refused: cannot rewrite a ref that is not written "
+                f"as is in the YAML ({'; '.join(unwritable)})"
             )
+
+    def install_plan(self, port: str, clean_build: bool) -> InstallPlan:
+        """An Install of what the last poll showed: it records the Latest Commits and
+        versions shown (ADR-0003), after moving each Tag Ref to the version shown
+        (ADR-0007). Call it right after `async_check_before_install`."""
+        edits: dict[str, list[tuple[RefLocation, str]]] = {}
+        for _state, tag, location in self._moves():
+            if location is not None:
+                edits.setdefault(location.file, []).append((location, tag))
+        rewrites = tuple(
+            YamlRewrite(file, rewritten(self._files[file], refs), self._files[file])
+            for file, refs in edits.items()
+        )
+        tags = {
+            state.key: self._built(state)
+            for state in (self.data or {}).values()
+            if isinstance(state, VersionedGitSource)
+        }
+        return InstallPlan(
+            _latest_commits(self.data or {}), port, clean_build, tags=tags, rewrites=rewrites
+        )
+
+    def _moves(self) -> list[tuple[VersionedGitSource, str, RefLocation | None]]:
+        """Each Source following versions whose ref must move to the version offered,
+        with that version and where its ref is written, if it can be rewritten."""
+        moves = []
+        for state in (self.data or {}).values():
+            if isinstance(state, VersionedGitSource):
+                tag = self._built(state)
+                if tag != state.source.ref:
+                    moves.append((state, tag, state.source.written_at))
+        return moves
+
+    def _built(self, state: VersionedGitSource) -> str:
+        """The version an Install pressed now builds: the one offered, if any, else the
+        one the YAML names, even if changed by hand."""
+        installed, offered = self._installed_and_offered(state)
+        return offered if offered != installed else (state.source.ref or installed)
 
     async def async_set_poll_interval(self, interval: timedelta) -> None:
         """Poll every *interval* from now on, starting with a poll right away.
@@ -269,18 +313,17 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
                 changes.append(SourceChange(key, state.source.url, installed, latest))
         return changes
 
-    def latest_commits(self) -> dict[str, str]:
-        """The Latest Commit last seen of each Git Source following Latest Commit, by key."""
-        return _latest_commits(self.data or {})
-
-    async def _discover(self) -> Discovery:
+    async def _discover(self) -> tuple[Discovery, dict[str, str]]:
+        """The Git Sources of the Tracked Config, and the text of each file read."""
         configuration = self.config_entry.data[CONF_CONFIGURATION]
+        files: dict[str, str] = {}
         try:
             async with self._session.connect(_POLLER) as client:
                 try:
-                    return await discover_git_sources(
-                        configuration, _reader(client, configuration)
+                    discovery = await discover_git_sources(
+                        configuration, _reader(client, configuration, files)
                     )
+                    return discovery, files
                 except _ReadRefused as err:
                     # The Device Builder may have started restricting reads to
                     # device files, as its MCP layer does; then includes stop
@@ -352,13 +395,16 @@ def _latest_commits(tracked: Mapping[str, GitSourceState]) -> dict[str, str]:
     }
 
 
-def _reader(client: DeviceBuilderClient, configuration: str) -> Reader:
+def _reader(client: DeviceBuilderClient, configuration: str, files: dict[str, str]) -> Reader:
+    """Reads over *client*, keeping each file's text in *files*."""
+
     async def read(path: str) -> str:
         try:
-            return await client.get_config(path)
+            files[path] = await client.get_config(path)
         except CommandFailed as err:
             if path == configuration:
                 raise
             raise _ReadRefused(path, err) from err
+        return files[path]
 
     return read

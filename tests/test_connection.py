@@ -255,7 +255,9 @@ class _NoBookkeeping:
     async def async_clear_active_install(self) -> None:
         pass
 
-    async def async_record_install(self, esphome_version: str, commits: Mapping[str, str]) -> None:
+    async def async_record_install(
+        self, esphome_version: str, commits: Mapping[str, str], tags: Mapping[str, str]
+    ) -> None:
         raise AssertionError("nothing should be recorded")
 
 

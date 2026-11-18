@@ -46,6 +46,7 @@ class FakeBookkeeping:
     # Every ActiveInstall set, in order.
     activity: list[ActiveInstall] = field(default_factory=list)
     recorded: tuple[str, Mapping[str, str]] | None = None
+    recorded_tags: Mapping[str, str] | None = None
 
     async def async_set_active_install(self, active: ActiveInstall) -> None:
         self.active = active
@@ -54,8 +55,11 @@ class FakeBookkeeping:
     async def async_clear_active_install(self) -> None:
         self.active = None
 
-    async def async_record_install(self, esphome_version: str, commits: Mapping[str, str]) -> None:
+    async def async_record_install(
+        self, esphome_version: str, commits: Mapping[str, str], tags: Mapping[str, str]
+    ) -> None:
         self.recorded = (esphome_version, dict(commits))
+        self.recorded_tags = dict(tags)
         self.active = None
 
 

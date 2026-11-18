@@ -9,7 +9,7 @@ from __future__ import annotations
 import posixpath
 import re
 from collections import Counter
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, NamedTuple
@@ -66,6 +66,28 @@ class RefKind(Enum):
 
 
 @dataclass(frozen=True)
+class RefLocation:
+    """Where a Git Source's ref is written: a span of one file's text, which an
+    Install rewrites to move the ref to another tag (ADR-0007)."""
+
+    # The file, as the reader names it.
+    file: str
+    # The span of the ref's text in that file, quotes excluded.
+    start: int
+    end: int
+
+
+def rewritten(text: str, refs: Iterable[tuple[RefLocation, str]]) -> str:
+    """*text* with each ref located in it replaced by its tag; every other byte is kept.
+
+    Each location must be one found in *text*, read from that location's file.
+    """
+    for location, tag in sorted(refs, key=lambda edit: edit[0].start, reverse=True):
+        text = text[: location.start] + tag + text[location.end :]
+    return text
+
+
+@dataclass(frozen=True)
 class GitSource:
     """An `external_components` or remote `packages:` entry that points at git."""
 
@@ -73,6 +95,8 @@ class GitSource:
     url: str
     # None: the remote's default branch.
     ref: str | None
+    # Where the ref's text is written, if it is written as is in one place.
+    written_at: RefLocation | None = field(default=None, compare=False)
 
     @property
     def kind(self) -> RefKind:
@@ -144,8 +168,18 @@ _MERGE_KEY = "<<"
 _MAX_SUBSTITUTION_DEPTH = 10
 
 
+class _Written(str):
+    """A string scalar as written in a file, with where it is written."""
+
+    location: RefLocation
+
+
 class _Loader(yaml.SafeLoader):
-    """A loader that accepts ESPHome's custom tags."""
+    """A loader that accepts ESPHome's custom tags, and keeps where strings are written."""
+
+    def __init__(self, text: str, path: str) -> None:
+        super().__init__(text)
+        self.path = path
 
     def flatten_mapping(self, node: yaml.MappingNode) -> None:
         # PyYAML can only merge mappings it has already loaded; an included
@@ -154,6 +188,21 @@ class _Loader(yaml.SafeLoader):
             if key_node.tag == "tag:yaml.org,2002:merge" and value_node.tag == "!include":
                 key_node.tag = "tag:yaml.org,2002:str"
         super().flatten_mapping(node)
+
+
+def _construct_str(loader: _Loader, node: yaml.ScalarNode) -> str:
+    """A string scalar, with where it is written if it is written as is."""
+    value = str(loader.construct_scalar(node))
+    start, end = node.start_mark.index, node.end_mark.index
+    if node.style in ("'", '"'):
+        start, end = start + 1, end - 1
+    # Only a scalar written exactly as its value can be rewritten in place:
+    # not one with escapes, or folded over several lines.
+    if node.style not in (None, "'", '"') or loader.buffer[start:end] != value:
+        return value
+    written = _Written(value)
+    written.location = RefLocation(loader.path, start, end)
+    return written
 
 
 def _construct_secret(loader: _Loader, node: yaml.Node) -> _Secret:
@@ -178,6 +227,7 @@ def _construct_tagged(loader: _Loader, suffix: str, node: yaml.Node) -> _Tagged:
     return _Tagged(f"!{suffix}", value)
 
 
+_Loader.add_constructor("tag:yaml.org,2002:str", _construct_str)
 _Loader.add_constructor("!secret", _construct_secret)
 _Loader.add_constructor("!include", _construct_include)
 _Loader.add_multi_constructor("!", _construct_tagged)
@@ -335,7 +385,11 @@ async def _load(path: str, read: Reader, depth: int) -> Any:
     if depth > _MAX_INCLUDE_DEPTH:
         raise DiscoveryError(f"includes nested too deeply at {path}")
     try:
-        document = yaml.load(await read(path), _Loader)
+        loader = _Loader(await read(path), path)
+        try:
+            document = loader.get_single_data()
+        finally:
+            loader.dispose()
     except yaml.YAMLError as err:
         raise DiscoveryError(f"cannot parse {path}: {err}") from err
     return await _resolve_includes(document, posixpath.dirname(path), read, depth)
@@ -367,6 +421,9 @@ def _substitute(value: Any, substitutions: dict[str, Any]) -> Any:
     value cannot be known.
     """
     if isinstance(value, str):
+        if _VARIABLE.search(value) is None:
+            # Kept as is, with where it is written.
+            return value
         secrets: list[_Secret] = []
 
         def replace(match: re.Match[str]) -> str:
@@ -412,7 +469,12 @@ def _parse_source(value: Any) -> GitSource | None:
     if isinstance(value, dict) and value.get("type") == "git":
         url = str(value["url"])
         ref = value.get("ref")
-        return GitSource(_repo_name(url), url, None if ref is None else str(ref))
+        return GitSource(
+            _repo_name(url),
+            url,
+            None if ref is None else str(ref),
+            ref.location if isinstance(ref, _Written) else None,
+        )
     return None
 
 

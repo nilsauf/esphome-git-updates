@@ -11,6 +11,7 @@ from custom_components.esphome_git_updates.git_sources import (
     OtaStatus,
     RefKind,
     discover_git_sources,
+    rewritten,
 )
 
 
@@ -125,6 +126,63 @@ async def test_a_source_without_a_ref_is_an_unset_ref() -> None:
     discovery = await _discover("external_components:\n  - source: github://tomquist/marsrelay\n")
 
     assert [source.kind for source in discovery.sources] == [RefKind.UNSET]
+
+
+@pytest.mark.parametrize("written", ["v1.4.0", '"v1.4.0"', "'v1.4.0'"])
+async def test_an_inline_tag_ref_is_located_so_only_its_text_is_rewritten(written: str) -> None:
+    main = f"""# comment: v1.4.0
+external_components:
+  - source:
+      type: git
+      url: https://gitlab.com/someone/sensors
+      ref:   {written}   # pinned to v1.4.0
+    refresh: 1d
+"""
+    discovery = await _discover(main)
+
+    [source] = discovery.sources
+    assert source.written_at is not None
+    assert source.written_at.file == "node.yaml"
+    assert rewritten(main, [(source.written_at, "v1.10.0")]) == main.replace(
+        f"ref:   {written}", f"ref:   {written.replace('v1.4.0', 'v1.10.0')}"
+    )
+
+
+async def test_two_refs_in_one_file_are_rewritten_together() -> None:
+    main = """external_components:
+  - source:
+      type: git
+      url: https://gitlab.com/someone/sensors
+      ref: v1.4.0
+  - source:
+      type: git
+      url: https://gitlab.com/someone/relays
+      ref: v2.0
+"""
+    discovery = await _discover(main)
+
+    edits = [(source.written_at, tag) for source, tag in zip(
+        discovery.sources, ["v1.10.0", "v2.1"], strict=True
+    ) if source.written_at is not None]
+    assert rewritten(main, edits) == main.replace("v1.4.0", "v1.10.0").replace("v2.0", "v2.1")
+
+
+async def test_a_ref_from_a_substitution_is_not_located_as_written_inline() -> None:
+    discovery = await _discover(
+        """
+substitutions:
+  version: v1.4.0
+external_components:
+  - source:
+      type: git
+      url: https://gitlab.com/someone/sensors
+      ref: ${version}
+"""
+    )
+
+    [source] = discovery.sources
+    assert source.ref == "v1.4.0"
+    assert source.written_at is None
 
 
 async def test_substitutions_are_applied_to_urls_and_refs() -> None:

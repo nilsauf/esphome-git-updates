@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from .device_builder import (
@@ -27,6 +27,7 @@ from .install_log import (
     DEVICE_OFFLINE_TEXT,
     DEVICE_UNREACHABLE,
     OUTCOME_UNKNOWN_TEXT,
+    UPDATE_YAML,
     InstallLog,
     InstallStage,
     warnings_text,
@@ -49,6 +50,18 @@ class ActiveInstall:
     # Whether it started with a Clean Build, so its progress bands are known
     # even when it is re-attached after the clean step.
     clean_build: bool = False
+    # The Installed Tags to record if it succeeds.
+    tags: Mapping[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class YamlRewrite:
+    """One file of the Tracked Config to write before compiling (ADR-0007)."""
+
+    file: str
+    content: str
+    # The text read before the Install: a file changed since is not overwritten.
+    expected: str
 
 
 @dataclass(frozen=True)
@@ -60,6 +73,11 @@ class InstallPlan:
     # The upload address.
     port: str
     clean_build: bool
+    # The Installed Tags to record if it succeeds: the versions shown when
+    # Install was pressed, by repository URL.
+    tags: Mapping[str, str] = field(default_factory=dict)
+    # The files to write first, in order, to move Tag Refs to those versions.
+    rewrites: tuple[YamlRewrite, ...] = ()
 
 
 # A notification's headline and message.
@@ -136,7 +154,7 @@ class InstallBookkeeping(Protocol):
     async def async_clear_active_install(self) -> None: ...
 
     async def async_record_install(
-        self, esphome_version: str, commits: Mapping[str, str]
+        self, esphome_version: str, commits: Mapping[str, str], tags: Mapping[str, str]
     ) -> None: ...
 
 
@@ -160,25 +178,22 @@ class _Observer:
     def __init__(
         self,
         bookkeeping: InstallBookkeeping,
-        commits: Mapping[str, str],
-        port: str,
-        clean_build: bool,
+        plan: InstallPlan,
         on_percentage: Callable[[int], None],
     ) -> None:
         self.log = InstallLog()
         self._bookkeeping = bookkeeping
-        self._commits = commits
-        self._port = port
-        self._clean_build = clean_build
-        self._bar = InstallProgress(clean_build)
+        self._plan = plan
+        self._bar = InstallProgress(plan.clean_build)
         self._on_percentage = on_percentage
 
     def output(self, stage: Stage, line: str) -> None:
         self.log(stage, line)
 
     async def jobs(self, jobs: tuple[ActiveJob, ...]) -> None:
+        plan = self._plan
         await self._bookkeeping.async_set_active_install(
-            ActiveInstall(jobs, self._commits, self._port, self._clean_build)
+            ActiveInstall(jobs, plan.commits, plan.port, plan.clean_build, plan.tags)
         )
 
     def progress(self, update: JobProgress) -> None:
@@ -200,7 +215,8 @@ class InstallRunner:
         self._bookkeeping = bookkeeping
 
     async def run(self, plan: InstallPlan, on_percentage: Callable[[int], None]) -> InstallEnding:
-        """Run an Install: an optional Clean Build, then compile, then upload."""
+        """Run an Install: write the plan's rewrites, then an optional Clean Build,
+        then compile, then upload."""
 
         def start(
             client: DeviceBuilderClient, observer: InstallObserver
@@ -227,7 +243,8 @@ class InstallRunner:
                 self._configuration, active.jobs, port=active.port, observer=observer
             )
 
-        plan = InstallPlan(active.commits, active.port, active.clean_build)
+        # Its rewrites were written before its jobs were queued.
+        plan = InstallPlan(active.commits, active.port, active.clean_build, active.tags)
         first_stage = active.jobs[0].stage
         return await self._follow(plan, first_stage, start, on_percentage, reattached=True)
 
@@ -240,12 +257,15 @@ class InstallRunner:
         *,
         reattached: bool,
     ) -> InstallEnding:
-        observer = _Observer(
-            self._bookkeeping, plan.commits, plan.port, plan.clean_build, on_percentage
-        )
+        observer = _Observer(self._bookkeeping, plan, on_percentage)
         log = observer.log
         try:
             async with self._session.connect(DRIFT_NAME, long_running=True) as client:
+                log.stage = UPDATE_YAML
+                for rewrite in plan.rewrites:
+                    await client.update_config(
+                        rewrite.file, rewrite.content, expected=rewrite.expected
+                    )
                 # The first job's output names its stage; until then, it is the first.
                 log.stage = first_stage
                 result = await start(client, observer)
@@ -265,7 +285,7 @@ class InstallRunner:
             if result.stage == Stage.UPLOAD and log.device_unreachable:
                 return await self._failed(log, result.stage, DEVICE_UNREACHABLE)
             return await self._failed(log, result.stage, result.error or result.outcome.value)
-        await self._bookkeeping.async_record_install(esphome_version, plan.commits)
+        await self._bookkeeping.async_record_install(esphome_version, plan.commits, plan.tags)
         return Installed(tuple(log.warnings))
 
     async def _failed(self, log: InstallLog, stage: InstallStage, error: str) -> Failed:

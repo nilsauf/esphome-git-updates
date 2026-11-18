@@ -27,7 +27,7 @@ from .coordinator import (
     TrackedConfigStore,
 )
 from .git_coordinator import GitSourcesCoordinator
-from .install import ActiveInstall, Installed, InstallEnding, InstallPlan, InstallRunner
+from .install import ActiveInstall, Installed, InstallEnding, InstallRunner
 from .linked_device import LinkedDevice
 from .options import Options
 from .versions import Versions
@@ -163,7 +163,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         await self._check_before_install()
         # What gets recorded is what the check just read, not what the remote
         # holds once the build is done: a push during the build stays an update.
-        plan = InstallPlan(self._git.latest_commits(), options.upload_address, options.clean_build)
+        plan = self._git.install_plan(options.upload_address, options.clean_build)
         task = self._start(lambda: self._runner.run(plan, self._set_percentage), reattached=False)
         # Not awaited directly: cancelling the action must not cancel the Install.
         await asyncio.wait([task])

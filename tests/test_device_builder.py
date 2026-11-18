@@ -131,6 +131,45 @@ async def test_a_command_error_raises_command_failed_with_the_server_code() -> N
     assert err.value.details == "Device 'nope.yaml' not found"
 
 
+async def test_update_config_writes_the_yaml_if_it_is_still_as_expected() -> None:
+    transcript = [
+        server_info(),
+        {"dir": "out", "frame": {"command": "devices/update_config", "message_id": "1",
+                                 "args": {"configuration": "b2500.yaml",
+                                          "content": "ref: v1.5.0\n",
+                                          "expected": "ref: v1.4.0\n"}}},
+        {"dir": "in", "frame": {"message_id": "1", "result": None}},
+    ]
+    async with (
+        serve(transcript) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        await client.update_config("b2500.yaml", "ref: v1.5.0\n", expected="ref: v1.4.0\n")
+    assert fake.mismatches == []
+
+
+async def test_update_config_of_a_file_changed_meanwhile_raises_precondition_failed() -> None:
+    transcript = [
+        server_info(),
+        {"dir": "out", "frame": {"command": "devices/update_config", "message_id": "1",
+                                 "args": {"configuration": "b2500.yaml",
+                                          "content": "ref: v1.5.0\n",
+                                          "expected": "ref: v1.4.0\n"}}},
+        {"dir": "in", "frame": {"message_id": "1", "error_code": "precondition_failed",
+                                "details": "content changed"}},
+    ]
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.PreconditionFailed) as err:
+            await client.update_config("b2500.yaml", "ref: v1.5.0\n", expected="ref: v1.4.0\n")
+    assert isinstance(err.value, device_builder.CommandFailed)
+    assert "b2500.yaml" in str(err.value)
+
+
 async def test_a_frame_for_another_message_raises_unexpected_frame() -> None:
     transcript = [
         server_info(),

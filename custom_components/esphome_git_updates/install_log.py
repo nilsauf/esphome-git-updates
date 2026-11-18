@@ -64,8 +64,11 @@ def _strip_ansi(line: str) -> str:
 # The stage of an Install that has not reached its first job: connecting and logging in.
 CONNECT: Final = "connect"
 
+# The stage of an Install writing the Tracked Config's YAML, before its first job (ADR-0007).
+UPDATE_YAML: Final = "update YAML"
+
 # Where an Install is: before its first job, or at a job's stage.
-InstallStage = Stage | Literal["connect"]
+InstallStage = Stage | Literal["connect", "update YAML"]
 
 
 class InstallLog:

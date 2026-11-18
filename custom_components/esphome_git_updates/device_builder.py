@@ -106,6 +106,15 @@ class AuthenticationFailed(DeviceBuilderError):
     """The Device Builder requires a login and it failed or was not possible."""
 
 
+class PreconditionFailed(CommandFailed):
+    """`devices/update_config` refused to write: the file is no longer the text expected."""
+
+    def __init__(self, configuration: str, details: str) -> None:
+        super().__init__("devices/update_config", "precondition_failed", details)
+        self.args = (f"{configuration} changed since it was read: {details}",)
+        self.configuration = configuration
+
+
 class JobNotFound(DeviceBuilderError):
     """The Device Builder does not know the job: it never existed or was pruned."""
 
@@ -321,6 +330,23 @@ class DeviceBuilderClient:
         if not isinstance(result, str):
             raise UnexpectedFrame("malformed devices/get_config result", result)
         return result
+
+    async def update_config(self, configuration: str, content: str, *, expected: str) -> None:
+        """Write *content* to *configuration*, only if it still holds *expected*.
+
+        Raises `PreconditionFailed` if the file changed since *expected* was read.
+        """
+        try:
+            await self._command(
+                "devices/update_config",
+                configuration=configuration,
+                content=content,
+                expected=expected,
+            )
+        except CommandFailed as err:
+            if err.error_code == "precondition_failed":
+                raise PreconditionFailed(configuration, err.details) from err
+            raise
 
     async def get_job_progress(self, job_id: str) -> int | None:
         """The job's own 0-100 progress, or None while it has none.

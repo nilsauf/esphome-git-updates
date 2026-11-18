@@ -55,6 +55,8 @@ class _StoredInstall(TypedDict):
     # Whether it started with a Clean Build; absent in stores written before
     # ticket 14, where the progress bands did not need it.
     clean_build: NotRequired[bool]
+    # The Installed Tags to record if it succeeds, by repository URL.
+    tags: NotRequired[dict[str, str]]
 
 
 class _StoredData(TypedDict, total=False):
@@ -138,6 +140,7 @@ class TrackedConfigStore:
             stored["commits"],
             stored.get("port", OTA),
             stored.get("clean_build", False),
+            stored.get("tags", {}),
         )
 
     async def async_set_active_install(self, active: ActiveInstall) -> None:
@@ -147,6 +150,7 @@ class TrackedConfigStore:
             "commits": dict(active.commits),
             "port": active.port,
             "clean_build": active.clean_build,
+            "tags": dict(active.tags),
         }
         await self._store.async_save(self._data)
 
@@ -155,11 +159,15 @@ class TrackedConfigStore:
         if self._data.pop("active_install", None) is not None:
             await self._store.async_save(self._data)
 
-    async def async_record_install(self, esphome_version: str, commits: Mapping[str, str]) -> None:
-        """Record a successful Install: the version compiled with, and the commits seen
-        when Install was pressed (ADR-0003). The Install is no longer active."""
+    async def async_record_install(
+        self, esphome_version: str, commits: Mapping[str, str], tags: Mapping[str, str]
+    ) -> None:
+        """Record a successful Install: the version compiled with, and the commits and
+        versions seen when Install was pressed (ADR-0003, ADR-0007). The Install is no
+        longer active."""
         self._data["installed_esphome_version"] = esphome_version
         self._data["installed_commits"] = {**self._data.get("installed_commits", {}), **commits}
+        self._data["installed_tags"] = {**self._data.get("installed_tags", {}), **tags}
         self._data.pop("active_install", None)
         await self._store.async_save(self._data)
 

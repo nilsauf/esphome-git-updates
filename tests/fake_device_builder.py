@@ -17,7 +17,11 @@ The server answers `devices/get_config` from `files` (path -> raw YAML),
 the way the Device Builder reads its config directory, at any point: reads
 are not part of a transcript, and a connection that only reads files and
 closes is no mismatch. A path not in `files` gets `not_found`. Every path
-asked for is recorded in `reads`.
+asked for is recorded in `reads`. `devices/update_config` writes to `files`,
+also at any point, if the file still holds the `expected` text; otherwise it
+answers `precondition_failed`. Every path written is recorded in `writes`, and
+`before_write`, if set, is called with the path first, so a test can change
+things between the client's read and its write.
 
 It also answers `firmware/follow_job` from `jobs` (job id -> the frames' event
 data, `{"event": "output" | "result", "data": ...}`), the way the Device
@@ -46,7 +50,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -112,6 +116,8 @@ class FakeDeviceBuilder:
         self.transcript = transcript
         self.files = files if files is not None else {}
         self.reads: list[str] = []
+        self.writes: list[str] = []
+        self.before_write: Callable[[str], None] | None = None
         # The base URL, once served.
         self.url = ""
         self.mismatches: list[str] = []
@@ -238,6 +244,9 @@ class FakeDeviceBuilder:
             self.cleared.append(sent["args"]["configuration"])
             await ws.send_json({"message_id": message_id, "result": None})
             return
+        if sent.get("command") == "devices/update_config":
+            await self._write(ws, sent)
+            return
         if sent.get("command") != "devices/get_config":
             self.mismatches.append(f"unexpected after the transcript: {sent}")
             await ws.close()
@@ -292,6 +301,22 @@ class FakeDeviceBuilder:
                 }
             )
 
+    async def _write(self, ws: web.WebSocketResponse, sent: dict[str, Any]) -> None:
+        path = sent["args"]["configuration"]
+        if self.before_write is not None:
+            self.before_write(path)
+        if self.files.get(path) != sent["args"]["expected"]:
+            await ws.send_json(
+                {
+                    "message_id": sent["message_id"],
+                    "error_code": "precondition_failed",
+                    "details": "File content has changed since it was read",
+                }
+            )
+            return
+        self.writes.append(path)
+        self.files[path] = sent["args"]["content"]
+        await ws.send_json({"message_id": sent["message_id"], "result": None})
 
     async def _follow(self, ws: web.WebSocketResponse, message_id: str, job_id: str) -> None:
         self.followed.append(job_id)
@@ -332,10 +357,11 @@ _CLOSING = (WSMsgType.CLOSE, WSMsgType.CLOSING, WSMsgType.CLOSED)
 
 
 def _is_side_command(sent: dict[str, Any], expected: dict[str, Any]) -> bool:
-    """Whether *sent* is a file read or progress poll where the transcript
+    """Whether *sent* is a file read or write, or a progress poll, where the transcript
     expects another command."""
     return bool(
-        sent.get("command") in ("devices/get_config", "firmware/get_job")
+        sent.get("command")
+        in ("devices/get_config", "devices/update_config", "firmware/get_job")
         and sent.get("command") != expected["command"]
     )
 
