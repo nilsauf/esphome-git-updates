@@ -7,6 +7,7 @@ No Home Assistant imports: this asks GitHub's API, nothing more.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,7 +16,7 @@ import aiohttp
 GITHUB_API = "https://api.github.com"
 
 # GitHub that has not answered by then is taken to be unreachable.
-COMPARE_TIMEOUT = 30
+REQUEST_TIMEOUT = 30
 
 # A GitHub remote, over HTTPS or SSH: its owner and repository.
 _GITHUB_REMOTE = re.compile(
@@ -63,22 +64,41 @@ async def compare(
     A *token* raises GitHub's rate limit; without one, GitHub allows 60
     requests an hour from an address.
     """
-    url = f"{GITHUB_API}/repos/{repo}/compare/{base}...{head}"
+    return await _get(
+        session,
+        f"/repos/{repo}/compare/{base}...{head}",
+        token,
+        f"compare {repo} {base[:7]}...{head[:7]}",
+        _comparison,
+    )
+
+
+async def _get[T](
+    session: aiohttp.ClientSession,
+    path: str,
+    token: str | None,
+    asking: str,
+    read: Callable[[Any], T],
+) -> T:
+    """GitHub's answer at *path*, read by *read*; GitHubError if GitHub cannot be
+    asked, refuses, or answers what *read* cannot read. *asking* completes "cannot ..."."""
     try:
         async with session.get(
-            url, headers=_headers(token), timeout=aiohttp.ClientTimeout(total=COMPARE_TIMEOUT)
+            f"{GITHUB_API}{path}",
+            headers=_headers(token),
+            timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
         ) as response:
             status = response.status
             body = await response.json(content_type=None)
     except (aiohttp.ClientError, TimeoutError, ValueError) as err:
-        raise GitHubError(f"cannot compare {repo} {base[:7]}...{head[:7]}: {err!r}") from err
+        raise GitHubError(f"cannot {asking}: {err!r}") from err
     if status != 200:
         message = body.get("message") if isinstance(body, dict) else None
-        raise GitHubError(f"GitHub refused to compare {repo}: HTTP {status}: {message}")
+        raise GitHubError(f"GitHub refused to {asking}: HTTP {status}: {message}")
     try:
-        return _comparison(body)
+        return read(body)
     except (KeyError, TypeError, ValueError) as err:
-        raise GitHubError(f"unexpected compare answer for {repo}: {err!r}") from err
+        raise GitHubError(f"unexpected answer when asked to {asking}: {err!r}") from err
 
 
 def _headers(token: str | None) -> dict[str, str]:
@@ -124,24 +144,13 @@ async def releases(
     A refusal, a rate limit, a 404 or a timeout raise GitHubError: GitHub could
     not be asked, which is not the same as having no releases.
     """
-    url = f"{GITHUB_API}/repos/{repo}/releases?per_page={RELEASES_PER_PAGE}&page={page}"
-    try:
-        async with session.get(
-            url, headers=_headers(token), timeout=aiohttp.ClientTimeout(total=COMPARE_TIMEOUT)
-        ) as response:
-            status = response.status
-            body = await response.json(content_type=None)
-    except (aiohttp.ClientError, TimeoutError, ValueError) as err:
-        raise GitHubError(f"cannot list the releases of {repo}: {err!r}") from err
-    if status != 200:
-        message = body.get("message") if isinstance(body, dict) else None
-        raise GitHubError(
-            f"GitHub refused to list the releases of {repo}: HTTP {status}: {message}"
-        )
-    try:
-        return tuple(_release(release) for release in body)
-    except (KeyError, TypeError, ValueError) as err:
-        raise GitHubError(f"unexpected releases answer for {repo}: {err!r}") from err
+    return await _get(
+        session,
+        f"/repos/{repo}/releases?per_page={RELEASES_PER_PAGE}&page={page}",
+        token,
+        f"list the releases of {repo}",
+        lambda body: tuple(_release(release) for release in body),
+    )
 
 
 def _release(release: Any) -> Release:

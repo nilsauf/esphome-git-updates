@@ -45,14 +45,7 @@ _TAGS = "refs/tags/"
 
 async def resolve_ref(url: str, ref: str | None) -> RemoteRef:
     """Ask the remote at *url* what *ref* (None: its default branch) points to."""
-    _check_url(url)
-    if ref is None:
-        refs = await _ls_remote(url, "HEAD")
-        if "HEAD" not in refs:
-            raise GitRemoteError(f"{url} has no default branch")
-        return RemoteRef(RemoteRefKind.BRANCH, refs["HEAD"])
-    branch, tag = _branch_and_tag(ref)
-    found = _found(await _ls_remote(url, branch, tag), branch, tag)
+    found = (await _resolve(url, ref, tags=False)).ref
     if found is None:
         raise GitRemoteError(f"{url} has no branch or tag {ref}")
     return found
@@ -61,22 +54,29 @@ async def resolve_ref(url: str, ref: str | None) -> RemoteRef:
 async def resolve_ref_and_tags(url: str, ref: str | None) -> RemoteTags:
     """Ask the remote at *url* what *ref* (None: its default branch) points to, and
     list all its tags, in one call."""
+    return await _resolve(url, ref, tags=True)
+
+
+async def _resolve(url: str, ref: str | None, *, tags: bool) -> RemoteTags:
+    """What *ref* points to, with every tag listed if *tags*, else at most *ref*'s."""
     _check_url(url)
+    all_tags = (f"{_TAGS}*",) if tags else ()
+    found: RemoteRef | None
     if ref is None:
-        refs = await _ls_remote(url, "HEAD", f"{_TAGS}*")
+        refs = await _ls_remote(url, "HEAD", *all_tags)
         if "HEAD" not in refs:
             raise GitRemoteError(f"{url} has no default branch")
-        found: RemoteRef | None = RemoteRef(RemoteRefKind.BRANCH, refs["HEAD"])
+        found = RemoteRef(RemoteRefKind.BRANCH, refs["HEAD"])
     else:
         branch, tag = _branch_and_tag(ref)
-        refs = await _ls_remote(url, branch, f"{_TAGS}*")
+        refs = await _ls_remote(url, branch, *(all_tags or (tag,)))
         found = _found(refs, branch, tag)
-    tags = {
+    listed = {
         name.removeprefix(_TAGS): _peeled(refs, name)
         for name in refs
         if name.startswith(_TAGS) and not name.endswith("^{}")
     }
-    return RemoteTags(found, tags)
+    return RemoteTags(found, listed)
 
 
 def _check_url(url: str) -> None:
