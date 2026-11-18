@@ -32,8 +32,10 @@ from .git_sources import (
     discover_git_sources,
     version_of,
 )
+from .github import Release
 from .options import Options
 from .pre_install import PreInstallCheck, PreInstallIssues
+from .releases import GitHubReleases
 from .versions import SourceCommits
 
 _LOGGER = logging.getLogger(__name__)
@@ -58,11 +60,14 @@ class TrackedGitSource:
 @dataclass(frozen=True)
 class VersionedGitSource:
     """A Git Source following versions (a Tag Ref), with the Version Tags last seen on
-    its remote."""
+    its remote and its repository's Releases."""
 
     source: GitSource
     # Each Version Tag on the remote, with the commit it points to.
     version_tags: Mapping[str, str]
+    # Its Releases at GitHub's last answer: empty when it has none or is not on
+    # GitHub, None while GitHub has never answered.
+    releases: tuple[Release, ...] | None = ()
 
     @property
     def key(self) -> str:
@@ -70,11 +75,33 @@ class VersionedGitSource:
         return self.source.url
 
     def offered(self, installed: str) -> str:
-        """The newest Version Tag if strictly newer than *installed*, else *installed*."""
-        newest = max(self.version_tags, key=_version, default=None)
+        """The newest Release, or without Releases the newest Version Tag, if strictly
+        newer than *installed*; else *installed*.
+
+        Nothing newer is offered while GitHub has never answered, as it is not
+        known yet which of the two the Source follows.
+        """
+        if self.releases is None:
+            return installed
+        followed = [release.tag for release in self.releases] or list(self.version_tags)
+        newest = max(followed, key=_version, default=None)
         if newest is not None and _version(newest) > _version(installed):
             return newest
         return installed
+
+    def releases_between(self, installed: str, offered: str) -> tuple[Release, ...]:
+        """The Releases newer than *installed*, up to *offered*, newest first."""
+        return tuple(
+            sorted(
+                (
+                    release
+                    for release in self.releases or ()
+                    if _version(installed) < _version(release.tag) <= _version(offered)
+                ),
+                key=lambda release: _version(release.tag),
+                reverse=True,
+            )
+        )
 
 
 type GitSourceState = TrackedGitSource | VersionedGitSource
@@ -102,8 +129,9 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
     cannot be asked keeps what was last known of it. Newly seen Sources
     following Latest Commit are seeded with it, so they show no update until
     the next push (ADR-0003); Tag Refs are seeded with the tag the YAML names.
-    Each changed Git Source on GitHub is then compared over GitHub's API, for
-    release notes only.
+    A Tag Ref on GitHub also asks GitHub for its Releases, keeping the last
+    answer while GitHub cannot be asked. Each changed Git Source on GitHub is
+    then compared over GitHub's API, for release notes only.
     """
 
     config_entry: EsphomeGitUpdatesConfigEntry
@@ -130,6 +158,7 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
         # What the YAML said at the last successful poll.
         self._pre_install_check: PreInstallCheck | None = None
         self.comparisons = GitHubComparisons(hass, entry)
+        self._releases = GitHubReleases(hass, entry)
 
     async def _async_update_data(self) -> dict[str, GitSourceState]:
         discovery = await self._discover()
@@ -151,6 +180,7 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
                 raise result
             self._log_recovery(source)
             tracked[result.key] = result
+        tracked = await self._with_releases(tracked)
         await self._store.async_seed_installed_commits(
             _latest_commits(tracked), {source.key for source in discovery.sources}
         )
@@ -165,6 +195,21 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
         self._check(discovery, tracked)
         await self.comparisons.async_update(self._changes(tracked))
         return tracked
+
+    async def _with_releases(
+        self, tracked: dict[str, GitSourceState]
+    ) -> dict[str, GitSourceState]:
+        """*tracked*, each Source following versions with its repository's Releases."""
+        versioned = [state for state in tracked.values() if isinstance(state, VersionedGitSource)]
+        await self._releases.async_update(state.key for state in versioned)
+        return {
+            key: (
+                replace(state, releases=self._releases.get(state.key))
+                if isinstance(state, VersionedGitSource)
+                else state
+            )
+            for key, state in tracked.items()
+        }
 
     def _check(self, discovery: Discovery, tracked: dict[str, GitSourceState]) -> None:
         """Check the YAML just read for an Install, and raise or clear its Repair issues."""
@@ -247,7 +292,14 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
             if offered_commit is None
             else self.comparisons.get(state.key, installed_commit, offered_commit)
         )
-        return SourceCommits(state.source.name, installed, offered, comparison, versions=True)
+        return SourceCommits(
+            state.source.name,
+            installed,
+            offered,
+            comparison,
+            versions=True,
+            releases=state.releases_between(installed, offered),
+        )
 
     def _installed_and_offered(self, state: VersionedGitSource) -> tuple[str, str]:
         """The Installed Tag (until seeded, the one the YAML names) and the one offered."""

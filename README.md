@@ -61,7 +61,7 @@ packages:
     refresh: always
 ```
 
-Floating Refs (a branch, a tag that is not a version such as `stable`, or no ref) follow their Latest Commit. A Tag Ref (a Version Tag such as `v1.2.3`) follows the highest Version Tag on its remote; Install is refused while such an update is shown, as moving the ref is not supported yet. Pinned Refs (a commit) never produce an update. See [ADR-0004](docs/adr/0004-require-refresh-always.md) for why a Clean Build is not a substitute.
+Floating Refs (a branch, a tag that is not a version such as `stable`, or no ref) follow their Latest Commit. A Tag Ref (a Version Tag such as `v1.2.3`) follows the newest GitHub Release (drafts, prereleases and non-version tags ignored), or, when the repository has no Releases or is not on GitHub, the highest Version Tag on its remote; Install is refused while such an update is shown, as moving the ref is not supported yet. Pinned Refs (a commit) never produce an update. See [ADR-0004](docs/adr/0004-require-refresh-always.md) for why a Clean Build is not a substitute.
 
 ## Releasing
 

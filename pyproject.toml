@@ -40,6 +40,7 @@ files = [
     "tests/test_git_remote.py",
     "tests/test_git_sources.py",
     "tests/test_git_updates.py",
+    "tests/test_github_releases.py",
     "tests/test_install.py",
     "tests/test_linked_device.py",
     "tests/test_packaging.py",
