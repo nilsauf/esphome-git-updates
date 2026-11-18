@@ -111,16 +111,20 @@ class Release:
     prerelease: bool
 
 
-async def releases(
-    session: aiohttp.ClientSession, repo: str, token: str | None
-) -> tuple[Release, ...]:
-    """The releases of *repo* (`owner/repo`), newest published first; empty when it has none.
+# GitHub lists at most this many releases a page.
+RELEASES_PER_PAGE = 100
 
-    Only GitHub's first page is asked for, the 100 newest releases. A refusal,
-    a rate limit, a 404 or a timeout raise GitHubError: GitHub could not be
-    asked, which is not the same as having no releases.
+
+async def releases(
+    session: aiohttp.ClientSession, repo: str, token: str | None, page: int = 1
+) -> tuple[Release, ...]:
+    """One *page* of the releases of *repo* (`owner/repo`), newest published first:
+    fewer than RELEASES_PER_PAGE on the last page, empty when it has none.
+
+    A refusal, a rate limit, a 404 or a timeout raise GitHubError: GitHub could
+    not be asked, which is not the same as having no releases.
     """
-    url = f"{GITHUB_API}/repos/{repo}/releases?per_page=100"
+    url = f"{GITHUB_API}/repos/{repo}/releases?per_page={RELEASES_PER_PAGE}&page={page}"
     try:
         async with session.get(
             url, headers=_headers(token), timeout=aiohttp.ClientTimeout(total=COMPARE_TIMEOUT)

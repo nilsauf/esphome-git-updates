@@ -28,6 +28,8 @@ class FakeGitHub:
         self.authorizations: list[str | None] = []
         # The Authorization header of each Releases request, None when there was none.
         self.releases_authorizations: list[str | None] = []
+        # The `page` asked for by each Releases request.
+        self.releases_pages: list[int] = []
         # When set, every request is answered with this status, as a rate limit would be.
         self.failure: int | None = None
         # Each repository's releases, newest published first, as GitHub lists them.
@@ -58,12 +60,16 @@ class FakeGitHub:
 
     async def releases(self, request: web.Request) -> web.Response:
         self.releases_authorizations.append(request.headers.get("Authorization"))
+        self.releases_pages.append(int(request.query.get("page", "1")))
         if self.failure is not None:
             return web.json_response({"message": "API rate limit exceeded"}, status=self.failure)
         name = f"{request.match_info['owner']}/{request.match_info['repo']}"
         if name not in self.repos:
             return web.json_response({"message": "Not Found"}, status=404)
-        return web.json_response(self._releases.get(name, []))
+        per_page = int(request.query.get("per_page", "30"))
+        page = int(request.query.get("page", "1"))
+        start = (page - 1) * per_page
+        return web.json_response(self._releases.get(name, [])[start : start + per_page])
 
     async def compare(self, request: web.Request) -> web.Response:
         self.authorizations.append(request.headers.get("Authorization"))

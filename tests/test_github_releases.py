@@ -138,6 +138,72 @@ async def test_release_notes_show_each_newer_release_newest_first(
     )
 
 
+async def test_a_full_first_page_without_a_release_is_followed_by_the_next_page(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    fake_github: FakeGitHub,
+    marsrelay: GitRepo,
+) -> None:
+    marsrelay.tag("v1.4.0")
+    marsrelay.push()
+    marsrelay.tag("v1.5.0")
+    marsrelay.push()
+    # A Version Tag without a Release.
+    marsrelay.tag("v1.6.0")
+    fake_github.release(REPO, "v1.4.0")
+    fake_github.release(REPO, "v1.5.0")
+    # GitHub's first page of 100 holds only nightly prereleases and drafts.
+    for build in range(99):
+        fake_github.release(REPO, f"v1.6.0-nightly{build}", prerelease=True)
+    fake_github.release(REPO, "v1.6.0", draft=True)
+
+    await set_up(hass, builder)
+
+    assert _state(hass).attributes["latest_version"] == "2026.10.1 (marsrelay v1.5.0)"
+    assert fake_github.releases_pages == [1, 2]
+
+
+async def test_pages_without_a_release_are_asked_for_only_so_far_and_a_warning_says_so(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    fake_github: FakeGitHub,
+    marsrelay: GitRepo,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    marsrelay.tag("v1.4.0")
+    marsrelay.push()
+    marsrelay.tag("v1.5.0")
+    fake_github.release(REPO, "v1.4.0")
+    for build in range(600):
+        fake_github.release(REPO, f"v1.5.0-nightly{build}", prerelease=True)
+
+    await set_up(hass, builder)
+
+    assert fake_github.releases_pages == [1, 2, 3, 4, 5]
+    # Taken to have no Releases: its Version Tags are followed.
+    assert _state(hass).attributes["latest_version"] == "2026.10.1 (marsrelay v1.5.0)"
+    assert "500 newest releases" in caplog.text
+    assert "all drafts or prereleases" in caplog.text
+
+
+async def test_releases_are_asked_for_one_page_when_it_holds_a_release(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    fake_github: FakeGitHub,
+    marsrelay: GitRepo,
+) -> None:
+    marsrelay.tag("v1.4.0")
+    fake_github.release(REPO, "v1.4.0")
+    for build in range(150):
+        fake_github.release(REPO, f"v1.5.0-nightly{build}", prerelease=True)
+    fake_github.release(REPO, "v1.4.1")
+
+    await set_up(hass, builder)
+
+    assert _state(hass).attributes["latest_version"] == "2026.10.1 (marsrelay v1.4.1)"
+    assert fake_github.releases_pages == [1]
+
+
 async def test_a_repository_publishing_its_first_release_is_followed_by_releases_next_poll(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
