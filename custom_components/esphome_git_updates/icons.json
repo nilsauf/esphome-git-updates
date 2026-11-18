@@ -1,0 +1,12 @@
+{
+  "entity": {
+    "update": {
+      "firmware": {
+        "default": "mdi:source-branch-check",
+        "state": {
+          "on": "mdi:source-branch-sync"
+        }
+      }
+    }
+  }
+}
