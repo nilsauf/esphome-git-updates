@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Generator
+from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -13,6 +13,8 @@ from aiohasupervisor import SupervisorNotFoundError
 from aiohttp import ClientWebSocketResponse
 from homeassistant.core import HomeAssistant
 
+from custom_components.esphome_git_updates import github
+from fake_github import GITHUB_URL, FakeGitHub, serve_github
 from git_repo import GitRepo
 
 
@@ -65,3 +67,21 @@ def supervisor(hass: HomeAssistant) -> Generator[MagicMock]:
 def marsrelay(tmp_path: Path) -> GitRepo:
     """A Git Source's remote, with one commit on main."""
     return GitRepo(tmp_path / "marsrelay")
+
+
+@pytest.fixture
+def on_github(marsrelay: GitRepo, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let git reach marsrelay at its GitHub URL."""
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", f"url.{marsrelay.url}.insteadOf")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", GITHUB_URL)
+
+
+@pytest.fixture
+async def fake_github(
+    marsrelay: GitRepo, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[FakeGitHub]:
+    """The GitHub API, knowing marsrelay as nilsauf/marsrelay."""
+    async with serve_github({"nilsauf/marsrelay": marsrelay}) as fake:
+        monkeypatch.setattr(github, "GITHUB_API", fake.url)
+        yield fake

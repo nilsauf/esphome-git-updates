@@ -29,7 +29,7 @@ class Options:
     git_poll_interval: timedelta
     # Where the firmware is uploaded: the `port` of `firmware/install`.
     upload_address: str
-    # Used only to ask GitHub for release notes, at a higher rate limit.
+    # Used only to ask GitHub for Releases and release notes, at a higher rate limit.
     github_token: str | None
 
     @classmethod

@@ -16,13 +16,11 @@ from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
 from custom_components.esphome_git_updates import github
 from fake_device_builder import FakeDeviceBuilder, serve, server_info
-from fake_github import FakeGitHub, serve_github
+from fake_github import GITHUB_URL, FakeGitHub
 from git_repo import GitRepo
 from tracked_config import CONFIGURATION, ENTITY_ID, OTA, set_up, tick
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
-
-GITHUB_URL = "https://github.com/nilsauf/marsrelay.git"
 
 
 def _config(url: str) -> str:
@@ -30,23 +28,6 @@ def _config(url: str) -> str:
         f"esphome:\n  name: host-node\n{OTA}external_components:\n"
         f"  - source:\n      type: git\n      url: {url}\n    refresh: always\n"
     )
-
-
-@pytest.fixture
-def on_github(marsrelay: GitRepo, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Let git reach marsrelay at its GitHub URL."""
-    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
-    monkeypatch.setenv("GIT_CONFIG_KEY_0", f"url.{marsrelay.url}.insteadOf")
-    monkeypatch.setenv("GIT_CONFIG_VALUE_0", GITHUB_URL)
-
-
-@pytest.fixture
-async def fake_github(
-    marsrelay: GitRepo, monkeypatch: pytest.MonkeyPatch
-) -> AsyncIterator[FakeGitHub]:
-    async with serve_github({"nilsauf/marsrelay": marsrelay}) as fake:
-        monkeypatch.setattr(github, "GITHUB_API", fake.url)
-        yield fake
 
 
 async def _builder(url: str) -> AsyncIterator[FakeDeviceBuilder]:

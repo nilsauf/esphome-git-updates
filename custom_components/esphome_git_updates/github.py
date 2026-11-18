@@ -1,6 +1,7 @@
-"""The commits between two shas of a GitHub repository, for release notes only.
+"""What GitHub's API knows of a repository: the commits between two shas, for release
+notes, and its releases.
 
-No Home Assistant imports: this asks GitHub's compare API, nothing more.
+No Home Assistant imports: this asks GitHub's API, nothing more.
 """
 
 from __future__ import annotations
@@ -62,13 +63,10 @@ async def compare(
     A *token* raises GitHub's rate limit; without one, GitHub allows 60
     requests an hour from an address.
     """
-    headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
     url = f"{GITHUB_API}/repos/{repo}/compare/{base}...{head}"
     try:
         async with session.get(
-            url, headers=headers, timeout=aiohttp.ClientTimeout(total=COMPARE_TIMEOUT)
+            url, headers=_headers(token), timeout=aiohttp.ClientTimeout(total=COMPARE_TIMEOUT)
         ) as response:
             status = response.status
             body = await response.json(content_type=None)
@@ -83,9 +81,72 @@ async def compare(
         raise GitHubError(f"unexpected compare answer for {repo}: {err!r}") from err
 
 
+def _headers(token: str | None) -> dict[str, str]:
+    """A *token* raises GitHub's rate limit; without one, GitHub allows 60 requests an
+    hour from an address."""
+    headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def _comparison(body: Any) -> Comparison:
     commits = tuple(
         Commit(str(commit["sha"]), str(commit["commit"]["message"]), str(commit["html_url"]))
         for commit in body["commits"]
     )
     return Comparison(int(body["total_commits"]), commits)
+
+
+@dataclass(frozen=True)
+class Release:
+    """A GitHub release, as GitHub lists it: drafts and prereleases included."""
+
+    tag: str
+    title: str
+    body: str
+    # The release's page on GitHub.
+    url: str
+    draft: bool
+    prerelease: bool
+
+
+async def releases(
+    session: aiohttp.ClientSession, repo: str, token: str | None
+) -> tuple[Release, ...]:
+    """The releases of *repo* (`owner/repo`), newest published first; empty when it has none.
+
+    Only GitHub's first page is asked for, the 100 newest releases. A refusal,
+    a rate limit, a 404 or a timeout raise GitHubError: GitHub could not be
+    asked, which is not the same as having no releases.
+    """
+    url = f"{GITHUB_API}/repos/{repo}/releases?per_page=100"
+    try:
+        async with session.get(
+            url, headers=_headers(token), timeout=aiohttp.ClientTimeout(total=COMPARE_TIMEOUT)
+        ) as response:
+            status = response.status
+            body = await response.json(content_type=None)
+    except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+        raise GitHubError(f"cannot list the releases of {repo}: {err!r}") from err
+    if status != 200:
+        message = body.get("message") if isinstance(body, dict) else None
+        raise GitHubError(
+            f"GitHub refused to list the releases of {repo}: HTTP {status}: {message}"
+        )
+    try:
+        return tuple(_release(release) for release in body)
+    except (KeyError, TypeError, ValueError) as err:
+        raise GitHubError(f"unexpected releases answer for {repo}: {err!r}") from err
+
+
+def _release(release: Any) -> Release:
+    tag = str(release["tag_name"])
+    return Release(
+        tag=tag,
+        title=str(release.get("name") or tag),
+        body=str(release.get("body") or ""),
+        url=str(release["html_url"]),
+        draft=bool(release["draft"]),
+        prerelease=bool(release["prerelease"]),
+    )

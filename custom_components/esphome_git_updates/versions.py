@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .github import Comparison
+from .github import Comparison, Release
 
 # Home Assistant drops a longer release_summary.
 _MAX_SUMMARY = 255
@@ -40,6 +40,8 @@ class SourceCommits:
     comparison: Comparison | None = None
     # Whether installed and latest are Version Tags, shown in full, not commits.
     versions: bool = False
+    # For a Source following Releases: those after installed up to latest, newest first.
+    releases: tuple[Release, ...] = ()
 
     @property
     def changed(self) -> bool:
@@ -133,6 +135,11 @@ class Versions:
 def _source_notes(source: SourceCommits) -> str:
     if source.installed is None:
         return f"Latest commit {_short(source.latest)}"
+    if source.releases:
+        return f"{source.commit_change}\n\n" + "\n\n".join(
+            f"#### [{release.title}]({release.url})\n{release.body.strip()}".rstrip()
+            for release in source.releases
+        )
     if source.comparison is None:
         return source.commit_change
     lines = [
