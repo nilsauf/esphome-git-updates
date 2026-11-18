@@ -283,7 +283,7 @@ async def test_the_jobs_still_to_follow_are_kept_until_the_install_ends() -> Non
         (ActiveJob("58fd489cd24d", Stage.UPLOAD),),
     ]
     assert all(
-        (a.commits, a.port, a.clean_build) == (COMMITS, "127.0.0.1", True)
+        (a.plan.commits, a.plan.port, a.plan.clean_build) == (COMMITS, "127.0.0.1", True)
         for a in run.bookkeeping.activity
     )
     assert isinstance(run.ending, Installed)
@@ -368,8 +368,7 @@ LEFT_RUNNING = ActiveInstall(
         device_builder.ActiveJob("c1", device_builder.Stage.COMPILE),
         device_builder.ActiveJob("u1", device_builder.Stage.UPLOAD),
     ),
-    COMMITS,
-    port="OTA",
+    InstallPlan(COMMITS, port="OTA", clean_build=False),
 )
 
 

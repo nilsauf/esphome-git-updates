@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
 from .device_builder import (
@@ -39,22 +39,6 @@ DRIFT_NAME = "install"
 
 
 @dataclass(frozen=True)
-class ActiveInstall:
-    """An Install whose jobs run on the Device Builder, enough to re-attach to it."""
-
-    jobs: tuple[ActiveJob, ...]
-    commits: Mapping[str, str]
-    # The upload address it was started with: it still uploads there if the
-    # option changes before it is re-attached.
-    port: str
-    # Whether it started with a Clean Build, so its progress bands are known
-    # even when it is re-attached after the clean step.
-    clean_build: bool = False
-    # The Installed Tags to record if it succeeds.
-    tags: Mapping[str, str] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
 class YamlRewrite:
     """One file of the Tracked Config to write before compiling (ADR-0007)."""
 
@@ -78,6 +62,17 @@ class InstallPlan:
     tags: Mapping[str, str] = field(default_factory=dict)
     # The files to write first, in order, to move Tag Refs to those versions.
     rewrites: tuple[YamlRewrite, ...] = ()
+
+
+@dataclass(frozen=True)
+class ActiveInstall:
+    """An Install whose jobs run on the Device Builder, enough to re-attach to it."""
+
+    jobs: tuple[ActiveJob, ...]
+    # The plan it was started with, its rewrites already written. A re-attached
+    # Install still uploads to its port if the option changed meanwhile, and its
+    # Clean Build tells its progress bands even after the clean step.
+    plan: InstallPlan
 
 
 # A notification's headline and message.
@@ -191,10 +186,9 @@ class _Observer:
         self.log(stage, line)
 
     async def jobs(self, jobs: tuple[ActiveJob, ...]) -> None:
-        plan = self._plan
-        await self._bookkeeping.async_set_active_install(
-            ActiveInstall(jobs, plan.commits, plan.port, plan.clean_build, plan.tags)
-        )
+        # Its rewrites are written before its jobs are queued.
+        written = replace(self._plan, rewrites=())
+        await self._bookkeeping.async_set_active_install(ActiveInstall(jobs, written))
 
     def progress(self, update: JobProgress) -> None:
         if self._bar.report(update):
@@ -240,13 +234,11 @@ class InstallRunner:
             client: DeviceBuilderClient, observer: InstallObserver
         ) -> Awaitable[InstallResult]:
             return client.resume_install(
-                self._configuration, active.jobs, port=active.port, observer=observer
+                self._configuration, active.jobs, port=active.plan.port, observer=observer
             )
 
-        # Its rewrites were written before its jobs were queued.
-        plan = InstallPlan(active.commits, active.port, active.clean_build, active.tags)
         first_stage = active.jobs[0].stage
-        return await self._follow(plan, first_stage, start, on_percentage, reattached=True)
+        return await self._follow(active.plan, first_stage, start, on_percentage, reattached=True)
 
     async def _follow(
         self,

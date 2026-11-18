@@ -15,7 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .connection import DeviceBuilderSession, DeviceBuilderUnavailable
 from .const import DOMAIN, VERSION_POLL_INTERVAL
 from .device_builder import OTA, ActiveJob, Stage
-from .install import ActiveInstall
+from .install import ActiveInstall, InstallPlan
 
 if TYPE_CHECKING:
     from .git_coordinator import GitSourcesCoordinator
@@ -137,20 +137,22 @@ class TrackedConfigStore:
             return None
         return ActiveInstall(
             tuple(ActiveJob(job["job_id"], Stage(job["stage"])) for job in stored["jobs"]),
-            stored["commits"],
-            stored.get("port", OTA),
-            stored.get("clean_build", False),
-            stored.get("tags", {}),
+            InstallPlan(
+                stored["commits"],
+                stored.get("port", OTA),
+                stored.get("clean_build", False),
+                stored.get("tags", {}),
+            ),
         )
 
     async def async_set_active_install(self, active: ActiveInstall) -> None:
         """Remember the jobs an Install still has to follow, until it ends."""
         self._data["active_install"] = {
             "jobs": [{"job_id": job.job_id, "stage": str(job.stage)} for job in active.jobs],
-            "commits": dict(active.commits),
-            "port": active.port,
-            "clean_build": active.clean_build,
-            "tags": dict(active.tags),
+            "commits": dict(active.plan.commits),
+            "port": active.plan.port,
+            "clean_build": active.plan.clean_build,
+            "tags": dict(active.plan.tags),
         }
         await self._store.async_save(self._data)
 
