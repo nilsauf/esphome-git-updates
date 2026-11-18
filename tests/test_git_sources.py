@@ -518,3 +518,92 @@ async def test_any_zero_refresh_period_or_always_refreshes_on_every_build(refres
     )
 
     assert discovery.wrong_refresh_policy == ()
+
+
+async def test_an_unset_ref_is_located_where_a_ref_line_is_inserted_after_its_url() -> None:
+    main = """
+external_components:
+  - source:
+      type: git
+      url: https://gitlab.com/someone/sensors   # sensors
+      components: [sensors]
+    refresh: always
+packages:
+  - url: https://gitlab.com/someone/pkg
+    files: [a.yaml]
+"""
+    discovery = await _discover(main)
+
+    edits = [
+        (source.written_at, "v1.5.0")
+        for source in discovery.sources
+        if source.written_at is not None
+    ]
+    assert len(edits) == 2
+    assert rewritten(main, edits) == main.replace(
+        "# sensors\n", "# sensors\n      ref: v1.5.0\n"
+    ).replace("pkg\n", "pkg\n    ref: v1.5.0\n")
+
+
+async def test_an_inserted_ref_that_would_not_read_as_a_string_is_quoted() -> None:
+    main = "external_components:\n  - source:\n      type: git\n      url: https://x/y\n"
+    discovery = await _discover(main)
+    [source] = discovery.sources
+    assert source.written_at is not None
+
+    assert rewritten(main, [(source.written_at, "1.10")]) == main + '      ref: "1.10"\n'
+
+
+async def test_an_unset_ref_on_the_last_line_without_a_newline_is_inserted_after_it() -> None:
+    main = "external_components:\n  - source:\n      type: git\n      url: https://x/y"
+    [source] = (await _discover(main)).sources
+    assert source.written_at is not None
+
+    assert rewritten(main, [(source.written_at, "v2")]) == main + "\n      ref: v2"
+
+
+async def test_a_shorthand_without_a_ref_is_located_where_its_ref_is_appended() -> None:
+    main = """
+external_components:
+  - source: "github://tomquist/marsrelay"
+packages:
+  - github://someone/pkg/common.yaml
+"""
+    discovery = await _discover(main)
+
+    edits = [
+        (source.written_at, "v1.5.0")
+        for source in discovery.sources
+        if source.written_at is not None
+    ]
+    assert len(edits) == 2
+    assert rewritten(main, edits) == main.replace("marsrelay\"", "marsrelay@v1.5.0\"").replace(
+        "common.yaml", "common.yaml@v1.5.0"
+    )
+
+
+async def test_an_unset_ref_in_a_flow_style_mapping_cannot_follow_versions() -> None:
+    discovery = await _discover(
+        """
+external_components:
+  - source: {type: git, url: https://gitlab.com/someone/sensors}
+"""
+    )
+
+    [source] = discovery.sources
+    # It still follows its Latest Commit, but a ref cannot be inserted to follow versions.
+    assert source.ref is None
+    assert source.written_at is None
+    [reason] = discovery.untrackable
+    assert "flow-style" in reason
+    assert "https://gitlab.com/someone/sensors" in reason
+
+
+async def test_an_empty_ref_key_is_not_given_a_second_ref_line() -> None:
+    discovery = await _discover(
+        "external_components:\n  - source:\n      type: git\n      url: https://x/y\n      ref:\n"
+    )
+
+    [source] = discovery.sources
+    assert source.ref is None
+    assert source.written_at is None

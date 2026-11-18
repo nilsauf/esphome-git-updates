@@ -62,8 +62,9 @@ class TrackedGitSource:
 
 @dataclass(frozen=True)
 class VersionedGitSource:
-    """A Git Source following versions (a Tag Ref), with the Version Tags last seen on
-    its remote and its repository's Releases."""
+    """A Git Source following versions (a Tag Ref, or an Unset Ref on a remote with
+    Version Tags), with the Version Tags last seen on its remote and its
+    repository's Releases."""
 
     source: GitSource
     # Each Version Tag on the remote, with the commit it points to.
@@ -131,7 +132,8 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
     (ADR-0006), then asks every remote with `git ls-remote`. A remote that
     cannot be asked keeps what was last known of it. Newly seen Sources
     following Latest Commit are seeded with it, so they show no update until
-    the next push (ADR-0003); Tag Refs are seeded with the tag the YAML names.
+    the next push (ADR-0003); Tag Refs are seeded with the tag the YAML names,
+    and Unset Refs that start following versions with the version they follow.
     A Tag Ref on GitHub also asks GitHub for its Releases, keeping the last
     answer while GitHub cannot be asked. Each changed Git Source on GitHub is
     then compared over GitHub's API, for release notes only.
@@ -189,13 +191,11 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
         await self._store.async_seed_installed_commits(
             _latest_commits(tracked), {source.key for source in discovery.sources}
         )
+        versioned = [state for state in tracked.values() if isinstance(state, VersionedGitSource)]
         await self._store.async_seed_installed_tags(
-            {
-                state.key: state.source.ref
-                for state in tracked.values()
-                if isinstance(state, VersionedGitSource) and state.source.ref is not None
-            },
-            {source.url for source in discovery.sources if source.kind is RefKind.TAG},
+            {state.key: seed for state in versioned if (seed := _seed(state))},
+            {state.key for state in versioned}
+            | {source.url for source in discovery.sources if source.kind is RefKind.TAG},
         )
         self._check(discovery, tracked)
         await self.comparisons.async_update(self._changes(tracked))
@@ -273,9 +273,9 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
             for file, refs in edits.items()
         )
         tags = {
-            state.key: self._built(state)
+            state.key: built
             for state in (self.data or {}).values()
-            if isinstance(state, VersionedGitSource)
+            if isinstance(state, VersionedGitSource) and (built := self._built(state))
         }
         return InstallPlan(
             _latest_commits(self.data or {}), port, clean_build, tags=tags, rewrites=rewrites
@@ -283,12 +283,17 @@ class GitSourcesCoordinator(DataUpdateCoordinator[dict[str, GitSourceState]]):
 
     def _moves(self) -> list[tuple[VersionedGitSource, str, RefLocation | None]]:
         """Each Source following versions whose ref must move to the version offered,
-        with that version and where its ref is written, if it can be rewritten."""
+        with that version and where its ref is written, if it can be rewritten.
+
+        An Unset Ref gains a ref only when a newer version is offered.
+        """
         moves = []
         for state in (self.data or {}).values():
             if isinstance(state, VersionedGitSource):
                 tag = self._built(state)
-                if tag != state.source.ref:
+                installed, offered = self._installed_and_offered(state)
+                unset_and_current = state.source.ref is None and offered == installed
+                if tag != state.source.ref and not unset_and_current:
                     moves.append((state, tag, state.source.written_at))
         return moves
 
@@ -421,17 +426,36 @@ async def _ask_remote(source: GitSource) -> GitSourceState:
 
     A Tag Ref follows the remote's Version Tags; but only the remote can tell
     a branch from a tag, and a Tag Ref that is a branch follows its Latest
-    Commit, as a Floating Ref does.
+    Commit, as a Floating Ref does. An Unset Ref follows versions while its
+    remote has a Version Tag (a Release's tag is one) and an Install can
+    insert its ref; else its Latest Commit.
     """
+    if source.kind is RefKind.UNSET and source.written_at is not None:
+        remote = await resolve_ref_and_tags(source.url, None)
+        versions = _version_tags(remote.tags)
+        if not versions and remote.ref is not None:
+            return TrackedGitSource(source, remote.ref.commit)
+        return VersionedGitSource(source, versions)
     if source.kind is not RefKind.TAG or source.ref is None:
         return TrackedGitSource(source, (await resolve_ref(source.url, source.ref)).commit)
     remote = await resolve_ref_and_tags(source.url, source.ref)
     if remote.ref is not None and remote.ref.kind is RemoteRefKind.BRANCH:
         return TrackedGitSource(source, remote.ref.commit)
-    return VersionedGitSource(
-        source,
-        {tag: commit for tag, commit in remote.tags.items() if version_of(tag) is not None},
-    )
+    return VersionedGitSource(source, _version_tags(remote.tags))
+
+
+def _version_tags(tags: Mapping[str, str]) -> dict[str, str]:
+    return {tag: commit for tag, commit in tags.items() if version_of(tag) is not None}
+
+
+def _seed(state: VersionedGitSource) -> str | None:
+    """The Installed Tag a Source newly following versions starts from: the tag a Tag
+    Ref names, or the version an Unset Ref follows, once GitHub has answered."""
+    if state.source.ref is not None:
+        return state.source.ref
+    if state.releases is None:
+        return None
+    return state.offered("") or None
 
 
 def _version(tag: str) -> tuple[int, ...]:
