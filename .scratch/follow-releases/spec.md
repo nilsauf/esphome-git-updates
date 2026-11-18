@@ -1,6 +1,6 @@
 # Follow Releases and Version Tags: spec
 
-Status: ready-for-agent
+Status: done
 
 Terms are defined in `GLOSSARY.md`. The decision to rewrite refs is in `docs/adr/0007-install-rewrites-tag-refs.md`, and the Refresh Policy exemption is noted in `docs/adr/0004-require-refresh-always.md`.
 
