@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] These remain at HA level:
   - one end-to-end case per ref kind (Floating, Tag, Unset, Pinned);

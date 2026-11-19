@@ -14,9 +14,13 @@ Reduce `GitHubReleases` to the stateless Releases port. It keeps paging, release
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `git_coordinator.py` contains no follow-mode decision, no key-scheme fallback and no seeding calls.
 - [ ] `GitHubReleases` holds no answers between polls.
 - [ ] The full existing test suite passes unchanged, except the one test that reaches into `runtime_data.git_coordinator` (`test_git_updates.py`), which is rewritten against the queries.
 - [ ] `ruff` passes.
+
+## Comments
+
+Implemented together with 01 in 777fdb1, because making the follow classes private broke the old poller. The `test_git_updates.py` test that reaches into `runtime_data.git_coordinator` only reads `last_update_success` and `last_exception`, so it was left unchanged rather than rewritten against the queries.

@@ -13,7 +13,7 @@ The poller is not rewired yet. If keeping both paths alive for one ticket costs 
 
 **Blocked by:** none
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `tests/test_following.py` builds `FollowedSources` with in-memory remote, Releases and record adapters. It needs no HA, no Device Builder and no git.
 - [ ] Each follow mode is covered: Floating Ref, Pinned Ref, Tag Ref with Releases, Tag Ref with Version Tags only, Tag Ref that is a branch, Unset Ref with Releases, with Version Tags only, and with neither, and an Unset Ref with no `written_at`.

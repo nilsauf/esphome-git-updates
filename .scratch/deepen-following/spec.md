@@ -1,6 +1,6 @@
 # Deepen the Followed Sources module: spec
 
-Status: ready-for-agent
+Status: resolved
 
 Terms are defined in `GLOSSARY.md`. Relevant decisions: ADR-0003 (installed record and seeding), ADR-0004 (Refresh Policy, exemption for sources following versions), ADR-0006 (raw YAML over `/ws`), ADR-0007 (Tag Refs follow Releases; the last GitHub answer is kept).
 
