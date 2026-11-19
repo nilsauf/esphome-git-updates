@@ -295,6 +295,46 @@ async def test_a_device_builder_that_cannot_be_reached_fails_the_git_poll_withou
     assert list(issue_registry.issues) == []
 
 
+async def test_a_poll_that_fails_after_asking_the_remotes_keeps_what_the_last_poll_saw(
+    hass: HomeAssistant, builder: FakeDeviceBuilder, marsrelay: GitRepo
+) -> None:
+    entry = await set_up(hass, builder)
+    git = entry.runtime_data.git_coordinator
+    compare = git.comparisons.async_update
+
+    async def fail_once(changes: Any) -> bool:
+        git.comparisons.async_update = compare
+        raise RuntimeError("unexpected")
+
+    git.comparisons.async_update = fail_once
+    marsrelay.push()
+    await git.async_refresh()
+    assert not git.last_update_success
+    # The remote cannot be asked: the Latest Commit last known is kept.
+    marsrelay.path.rename(marsrelay.path.with_name("gone"))
+
+    await git.async_refresh()
+
+    assert git.last_update_success
+    assert _state(hass).state == STATE_OFF
+
+
+async def test_a_renamed_entry_logs_under_its_new_title(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    marsrelay: GitRepo,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    entry = await set_up(hass, builder)
+    hass.config_entries.async_update_entry(entry, title="garden-node")
+    await hass.async_block_till_done()
+    marsrelay.path.rename(marsrelay.path.with_name("gone"))
+
+    await entry.runtime_data.git_coordinator.async_refresh()
+
+    assert "garden-node: cannot get the Latest Commit of marsrelay" in caplog.text
+
+
 async def test_a_configuration_the_device_builder_no_longer_has_is_not_protocol_drift(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,

@@ -74,15 +74,20 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
         self._pre_install_check: PreInstallCheck | None = None
         self.comparisons = GitHubComparisons(hass, entry)
         self._followed = FollowedSources(
-            LsRemote(), GitHubReleases(hass, entry), store, entry.title
+            # Renaming the entry does not reload it: log under its title of the moment.
+            LsRemote(),
+            GitHubReleases(hass, entry),
+            store,
+            lambda: entry.title,
         )
 
     async def _async_update_data(self) -> Snapshot:
         discovery, files = await self._discover()
         self._log_untrackable(discovery.untrackable)
-        snapshot = await self._followed.async_poll(discovery, files)
-        self._check(discovery)
-        await self.comparisons.async_update(self._followed.changes())
+        # A poll that fails from here on changes nothing it saw.
+        async with self._followed.async_poll(discovery, files) as snapshot:
+            self._check(discovery)
+            await self.comparisons.async_update(self._followed.changes())
         return snapshot
 
     def _check(self, discovery: Discovery) -> None:

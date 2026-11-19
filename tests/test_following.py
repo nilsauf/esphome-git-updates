@@ -25,7 +25,7 @@ OTHER = "https://github.com/someone/sensors.git"
 CONFIGURATION = "node.yaml"
 
 
-class Remote:
+class InMemoryRemotes:
     """Git remotes by url: each with its branches (None: the default branch) and tags."""
 
     def __init__(self) -> None:
@@ -43,7 +43,16 @@ class Remote:
     def tag(self, url: str, name: str, commit: str) -> None:
         self.tags.setdefault(url, {})[name] = commit
 
-    async def resolve(self, url: str, ref: str | None, *, tags: bool) -> RemoteTags:
+    async def resolve_ref(self, url: str, ref: str | None) -> RemoteRef:
+        found = (await self._resolve(url, ref, tags=False)).ref
+        if found is None:
+            raise GitRemoteError(f"{url} has no branch or tag {ref}")
+        return found
+
+    async def resolve_ref_and_tags(self, url: str, ref: str | None) -> RemoteTags:
+        return await self._resolve(url, ref, tags=True)
+
+    async def _resolve(self, url: str, ref: str | None, *, tags: bool) -> RemoteTags:
         if url in self.failing:
             raise GitRemoteError(f"{url} cannot be reached")
         branches = self.branches.get(url, {})
@@ -59,7 +68,7 @@ class Remote:
         return RemoteTags(found, listed)
 
 
-class Releases:
+class InMemoryReleases:
     """GitHub's Releases by url; a url not listed has none (or is not on GitHub)."""
 
     def __init__(self) -> None:
@@ -77,7 +86,7 @@ class Releases:
         return self.listed.get(url, ())
 
 
-class Record:
+class InMemoryRecord:
     """The installed record, in memory."""
 
     def __init__(self) -> None:
@@ -106,17 +115,19 @@ class NoComparisons:
         return None
 
 
-class Following:
-    """A FollowedSources over in-memory adapters, polling a YAML held in memory."""
+class InMemoryTrackedConfig:
+    """A Tracked Config whose YAML is held in memory, its Followed Sources polled over
+    in-memory remotes, Releases and installed record."""
 
     def __init__(self) -> None:
-        self.remote = Remote()
-        self.releases = Releases()
-        self.record = Record()
-        self.followed = FollowedSources(self.remote, self.releases, self.record, "node")
+        self.remote = InMemoryRemotes()
+        self.releases = InMemoryReleases()
+        self.record = InMemoryRecord()
+        self.followed = FollowedSources(self.remote, self.releases, self.record, lambda: "node")
         self.yaml = ""
 
-    async def poll(self, yaml: str | None = None) -> Snapshot:
+    async def poll(self, yaml: str | None = None, *, then: Exception | None = None) -> Snapshot:
+        """Poll, then raise *then* inside the poll's block, if given."""
         if yaml is not None:
             self.yaml = yaml
         files: dict[str, str] = {}
@@ -126,7 +137,10 @@ class Following:
             return files[path]
 
         discovery = await discover_git_sources(CONFIGURATION, read)
-        return await self.followed.async_poll(discovery, files)
+        async with self.followed.async_poll(discovery, files) as snapshot:
+            if then is not None:
+                raise then
+            return snapshot
 
     def shown(self) -> tuple[ShownSource, ...]:
         return self.followed.shown(NoComparisons())
@@ -167,273 +181,273 @@ def _logged(caplog: pytest.LogCaptureFixture) -> list[tuple[str, str]]:
 
 
 async def test_a_floating_ref_follows_its_latest_commit() -> None:
-    following = Following()
-    following.remote.branch(URL, "dev", "c1")
-    await following.poll(on_ref("dev"))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    await tracked.poll(on_ref("dev"))
 
-    following.remote.branch(URL, "dev", "c2")
-    await following.poll()
+    tracked.remote.branch(URL, "dev", "c2")
+    await tracked.poll()
 
-    assert following.shown() == (ShownSource("marsrelay", "c1", "c2"),)
+    assert tracked.shown() == (ShownSource("marsrelay", "c1", "c2"),)
 
 
 async def test_a_pinned_ref_is_not_followed() -> None:
-    following = Following()
-    following.remote.branch(URL, "main", "c1")
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "main", "c1")
 
-    await following.poll(on_ref("0123456789abcdef0123456789abcdef01234567"))
+    await tracked.poll(on_ref("0123456789abcdef0123456789abcdef01234567"))
 
-    assert following.shown() == ()
+    assert tracked.shown() == ()
 
 
 async def test_a_tag_ref_follows_releases_over_newer_version_tags() -> None:
-    following = Following()
-    following.remote.tag(URL, "v1.0.0", "c1")
-    following.remote.tag(URL, "v1.1.0", "c2")
-    following.remote.tag(URL, "v2.0.0", "c3")
-    following.releases.release(URL, "v1.0.0")
-    newer = following.releases.release(URL, "v1.1.0")
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "v1.0.0", "c1")
+    tracked.remote.tag(URL, "v1.1.0", "c2")
+    tracked.remote.tag(URL, "v2.0.0", "c3")
+    tracked.releases.release(URL, "v1.0.0")
+    newer = tracked.releases.release(URL, "v1.1.0")
 
-    await following.poll(on_ref("v1.0.0"))
+    await tracked.poll(on_ref("v1.0.0"))
 
-    assert following.shown() == (versions("v1.0.0", "v1.1.0", newer),)
+    assert tracked.shown() == (versions("v1.0.0", "v1.1.0", newer),)
 
 
 async def test_a_tag_ref_without_releases_follows_its_highest_version_tag() -> None:
-    following = Following()
-    following.remote.tag(URL, "v1.0.0", "c1")
-    following.remote.tag(URL, "v1.10.0", "c3")
-    following.remote.tag(URL, "v1.9.0", "c2")
-    following.remote.tag(URL, "nightly", "c4")
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "v1.0.0", "c1")
+    tracked.remote.tag(URL, "v1.10.0", "c3")
+    tracked.remote.tag(URL, "v1.9.0", "c2")
+    tracked.remote.tag(URL, "nightly", "c4")
 
-    await following.poll(on_ref("v1.0.0"))
+    await tracked.poll(on_ref("v1.0.0"))
 
-    assert following.shown() == (versions("v1.0.0", "v1.10.0"),)
+    assert tracked.shown() == (versions("v1.0.0", "v1.10.0"),)
 
 
 async def test_a_tag_ref_that_is_a_branch_follows_its_latest_commit() -> None:
-    following = Following()
-    following.remote.branch(URL, "v1.0", "c1", default=False)
-    following.remote.tag(URL, "v1.1", "c9")
-    await following.poll(on_ref("v1.0"))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "v1.0", "c1", default=False)
+    tracked.remote.tag(URL, "v1.1", "c9")
+    await tracked.poll(on_ref("v1.0"))
 
-    following.remote.branch(URL, "v1.0", "c2", default=False)
-    await following.poll()
+    tracked.remote.branch(URL, "v1.0", "c2", default=False)
+    await tracked.poll()
 
-    assert following.shown() == (ShownSource("marsrelay", "c1", "c2"),)
+    assert tracked.shown() == (ShownSource("marsrelay", "c1", "c2"),)
 
 
 async def test_an_unset_ref_follows_releases_starting_from_the_newest() -> None:
-    following = Following()
-    following.remote.branch(URL, "main", "c9")
-    following.remote.tag(URL, "v1.0.0", "c1")
-    following.remote.tag(URL, "v1.1.0", "c2")
-    following.releases.release(URL, "v1.0.0")
-    await following.poll(on_ref(None))
-    assert following.shown() == (versions("v1.0.0", "v1.0.0"),)
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "main", "c9")
+    tracked.remote.tag(URL, "v1.0.0", "c1")
+    tracked.remote.tag(URL, "v1.1.0", "c2")
+    tracked.releases.release(URL, "v1.0.0")
+    await tracked.poll(on_ref(None))
+    assert tracked.shown() == (versions("v1.0.0", "v1.0.0"),)
 
-    newer = following.releases.release(URL, "v1.2.0")
-    following.remote.tag(URL, "v1.2.0", "c3")
-    await following.poll()
+    newer = tracked.releases.release(URL, "v1.2.0")
+    tracked.remote.tag(URL, "v1.2.0", "c3")
+    await tracked.poll()
 
-    assert following.shown() == (versions("v1.0.0", "v1.2.0", newer),)
+    assert tracked.shown() == (versions("v1.0.0", "v1.2.0", newer),)
 
 
 async def test_an_unset_ref_without_releases_follows_version_tags() -> None:
-    following = Following()
-    following.remote.branch(URL, "main", "c9")
-    following.remote.tag(URL, "v1.0.0", "c1")
-    await following.poll(on_ref(None))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "main", "c9")
+    tracked.remote.tag(URL, "v1.0.0", "c1")
+    await tracked.poll(on_ref(None))
 
-    following.remote.tag(URL, "v1.1.0", "c2")
-    await following.poll()
+    tracked.remote.tag(URL, "v1.1.0", "c2")
+    await tracked.poll()
 
-    assert following.shown() == (versions("v1.0.0", "v1.1.0"),)
+    assert tracked.shown() == (versions("v1.0.0", "v1.1.0"),)
 
 
 async def test_an_unset_ref_without_version_tags_follows_its_latest_commit() -> None:
-    following = Following()
-    following.remote.branch(URL, "main", "c1")
-    following.remote.tag(URL, "nightly", "c0")
-    await following.poll(on_ref(None))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "main", "c1")
+    tracked.remote.tag(URL, "nightly", "c0")
+    await tracked.poll(on_ref(None))
 
-    following.remote.branch(URL, "main", "c2")
-    await following.poll()
+    tracked.remote.branch(URL, "main", "c2")
+    await tracked.poll()
 
-    assert following.shown() == (ShownSource("marsrelay", "c1", "c2"),)
+    assert tracked.shown() == (ShownSource("marsrelay", "c1", "c2"),)
 
 
 async def test_an_unset_ref_where_no_ref_can_be_inserted_follows_its_latest_commit() -> None:
-    following = Following()
-    following.remote.branch(URL, "main", "c1")
-    following.remote.tag(URL, "v1.0.0", "c0")
-    await following.poll(config(f"  - source: {{type: git, url: {URL}}}\n"))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "main", "c1")
+    tracked.remote.tag(URL, "v1.0.0", "c0")
+    await tracked.poll(config(f"  - source: {{type: git, url: {URL}}}\n"))
 
-    following.remote.branch(URL, "main", "c2")
-    following.remote.tag(URL, "v1.1.0", "c2")
-    await following.poll()
+    tracked.remote.branch(URL, "main", "c2")
+    tracked.remote.tag(URL, "v1.1.0", "c2")
+    await tracked.poll()
 
-    assert following.shown() == (ShownSource("marsrelay", "c1", "c2"),)
+    assert tracked.shown() == (ShownSource("marsrelay", "c1", "c2"),)
 
 
 async def test_a_moved_version_tag_offers_nothing() -> None:
-    following = Following()
-    following.remote.tag(URL, "v1.2.3", "c1")
-    await following.poll(on_ref("v1.2.3"))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "v1.2.3", "c1")
+    await tracked.poll(on_ref("v1.2.3"))
 
-    following.remote.tag(URL, "v1.2.3", "c2")
-    await following.poll()
+    tracked.remote.tag(URL, "v1.2.3", "c2")
+    await tracked.poll()
 
-    assert following.shown() == (versions("v1.2.3", "v1.2.3"),)
-    assert following.followed.changes() == []
+    assert tracked.shown() == (versions("v1.2.3", "v1.2.3"),)
+    assert tracked.followed.changes() == []
 
 
 async def test_a_tag_ref_is_never_offered_an_equal_or_older_version() -> None:
-    following = Following()
-    following.remote.tag(URL, "v1.9.0", "c1")
-    following.remote.tag(URL, "v2.0.0", "c2")
-    await following.poll(on_ref("v2.0.0"))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "v1.9.0", "c1")
+    tracked.remote.tag(URL, "v2.0.0", "c2")
+    await tracked.poll(on_ref("v2.0.0"))
 
     # Equal to v2.0.0, and a prerelease: neither is newer.
-    following.remote.tag(URL, "2.0", "c3")
-    following.remote.tag(URL, "v2.1.0-rc1", "c4")
-    await following.poll()
+    tracked.remote.tag(URL, "2.0", "c3")
+    tracked.remote.tag(URL, "v2.1.0-rc1", "c4")
+    await tracked.poll()
 
-    assert following.shown() == (versions("v2.0.0", "v2.0.0"),)
+    assert tracked.shown() == (versions("v2.0.0", "v2.0.0"),)
 
 
 async def test_a_first_release_switches_a_tag_ref_from_version_tags_to_releases() -> None:
-    following = Following()
-    following.remote.tag(URL, "v1.4.0", "c1")
-    following.remote.tag(URL, "v1.5.0", "c2")
-    following.remote.tag(URL, "v1.6.0", "c3")
-    await following.poll(on_ref("v1.4.0"))
-    assert following.shown() == (versions("v1.4.0", "v1.6.0"),)
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "v1.4.0", "c1")
+    tracked.remote.tag(URL, "v1.5.0", "c2")
+    tracked.remote.tag(URL, "v1.6.0", "c3")
+    await tracked.poll(on_ref("v1.4.0"))
+    assert tracked.shown() == (versions("v1.4.0", "v1.6.0"),)
 
-    release = following.releases.release(URL, "v1.5.0")
-    await following.poll()
+    release = tracked.releases.release(URL, "v1.5.0")
+    await tracked.poll()
 
-    assert following.shown() == (versions("v1.4.0", "v1.5.0", release),)
+    assert tracked.shown() == (versions("v1.4.0", "v1.5.0", release),)
 
 
 # Remotes and GitHub that cannot be asked.
 
 
-async def test_a_remote_that_fails_keeps_its_last_known_state() -> None:
-    following = Following()
-    following.remote.branch(URL, "dev", "c1")
-    await following.poll(on_ref("dev"))
-    following.remote.branch(URL, "dev", "c2")
-    await following.poll()
+async def test_a_remote_that_fails_keeps_its_last_known_latest_commit() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    await tracked.poll(on_ref("dev"))
+    tracked.remote.branch(URL, "dev", "c2")
+    await tracked.poll()
 
-    following.remote.failing.add(URL)
-    await following.poll()
+    tracked.remote.failing.add(URL)
+    await tracked.poll()
 
-    assert following.shown() == (ShownSource("marsrelay", "c1", "c2"),)
+    assert tracked.shown() == (ShownSource("marsrelay", "c1", "c2"),)
 
 
 async def test_an_unset_ref_that_switched_to_versions_keeps_them_while_its_remote_fails() -> None:
-    following = Following()
-    following.remote.branch(URL, "main", "c1")
-    await following.poll(on_ref(None))
-    following.remote.tag(URL, "v1.0.0", "c2")
-    await following.poll()
-    following.remote.tag(URL, "v1.1.0", "c3")
-    await following.poll()
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "main", "c1")
+    await tracked.poll(on_ref(None))
+    tracked.remote.tag(URL, "v1.0.0", "c2")
+    await tracked.poll()
+    tracked.remote.tag(URL, "v1.1.0", "c3")
+    await tracked.poll()
 
-    following.remote.failing.add(URL)
-    await following.poll()
+    tracked.remote.failing.add(URL)
+    await tracked.poll()
 
-    assert following.shown() == (versions("v1.0.0", "v1.1.0"),)
+    assert tracked.shown() == (versions("v1.0.0", "v1.1.0"),)
 
 
 async def test_a_first_version_tag_switches_an_unset_ref_to_versions_without_offering_it() -> None:
-    following = Following()
-    following.remote.branch(URL, "main", "c1")
-    await following.poll(on_ref(None))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "main", "c1")
+    await tracked.poll(on_ref(None))
 
-    following.remote.tag(URL, "v1.0.0", "c2")
-    following.remote.branch(URL, "main", "c2")
-    await following.poll()
+    tracked.remote.tag(URL, "v1.0.0", "c2")
+    tracked.remote.branch(URL, "main", "c2")
+    await tracked.poll()
 
-    assert following.shown() == (versions("v1.0.0", "v1.0.0"),)
-    assert following.followed.changes() == []
+    assert tracked.shown() == (versions("v1.0.0", "v1.0.0"),)
+    assert tracked.followed.changes() == []
 
 
 async def test_nothing_newer_is_offered_while_github_has_never_answered() -> None:
-    following = Following()
-    following.remote.tag(URL, "v1.0.0", "c1")
-    following.remote.tag(URL, "v2.0.0", "c2")
-    following.releases.release(URL, "v1.0.0")
-    newer = following.releases.release(URL, "v1.1.0")
-    following.releases.failing.add(URL)
-    await following.poll(on_ref("v1.0.0"))
-    assert following.shown() == (versions("v1.0.0", "v1.0.0"),)
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "v1.0.0", "c1")
+    tracked.remote.tag(URL, "v2.0.0", "c2")
+    tracked.releases.release(URL, "v1.0.0")
+    newer = tracked.releases.release(URL, "v1.1.0")
+    tracked.releases.failing.add(URL)
+    await tracked.poll(on_ref("v1.0.0"))
+    assert tracked.shown() == (versions("v1.0.0", "v1.0.0"),)
 
-    following.releases.failing.clear()
-    await following.poll()
+    tracked.releases.failing.clear()
+    await tracked.poll()
 
-    assert following.shown() == (versions("v1.0.0", "v1.1.0", newer),)
+    assert tracked.shown() == (versions("v1.0.0", "v1.1.0", newer),)
 
 
 async def test_github_failing_keeps_its_last_answer() -> None:
-    following = Following()
-    following.remote.tag(URL, "v1.0.0", "c1")
-    following.remote.tag(URL, "v2.0.0", "c2")
-    following.releases.release(URL, "v1.0.0")
-    newer = following.releases.release(URL, "v1.1.0")
-    await following.poll(on_ref("v1.0.0"))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "v1.0.0", "c1")
+    tracked.remote.tag(URL, "v2.0.0", "c2")
+    tracked.releases.release(URL, "v1.0.0")
+    newer = tracked.releases.release(URL, "v1.1.0")
+    await tracked.poll(on_ref("v1.0.0"))
 
-    following.releases.failing.add(URL)
-    await following.poll()
+    tracked.releases.failing.add(URL)
+    await tracked.poll()
 
-    assert following.shown() == (versions("v1.0.0", "v1.1.0", newer),)
+    assert tracked.shown() == (versions("v1.0.0", "v1.1.0", newer),)
 
 
 async def test_a_tag_ref_github_answers_has_no_releases_follows_its_version_tags() -> None:
-    following = Following()
-    following.remote.tag(URL, "v1.4.0", "c1")
-    following.remote.tag(URL, "v1.5.0", "c2")
-    following.releases.failing.add(URL)
-    await following.poll(on_ref("v1.4.0"))
-    assert following.shown() == (versions("v1.4.0", "v1.4.0"),)
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "v1.4.0", "c1")
+    tracked.remote.tag(URL, "v1.5.0", "c2")
+    tracked.releases.failing.add(URL)
+    await tracked.poll(on_ref("v1.4.0"))
+    assert tracked.shown() == (versions("v1.4.0", "v1.4.0"),)
 
-    following.releases.failing.clear()
-    await following.poll()
+    tracked.releases.failing.clear()
+    await tracked.poll()
 
-    assert following.shown() == (versions("v1.4.0", "v1.5.0"),)
+    assert tracked.shown() == (versions("v1.4.0", "v1.5.0"),)
 
 
 async def test_an_unset_ref_shows_no_version_until_github_answers() -> None:
-    following = Following()
-    following.remote.branch(URL, "main", "c9")
-    following.remote.tag(URL, "v1.4.0", "c1")
-    following.releases.failing.add(URL)
-    await following.poll(on_ref(None))
-    assert following.shown() == (versions("", ""),)
-    assert following.record.tags == {}
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "main", "c9")
+    tracked.remote.tag(URL, "v1.4.0", "c1")
+    tracked.releases.failing.add(URL)
+    await tracked.poll(on_ref(None))
+    assert tracked.shown() == (versions("", ""),)
+    assert tracked.record.tags == {}
 
-    following.remote.tag(URL, "v1.5.0", "c2")
-    following.releases.failing.clear()
-    await following.poll()
+    tracked.remote.tag(URL, "v1.5.0", "c2")
+    tracked.releases.failing.clear()
+    await tracked.poll()
 
     # GitHub answered "no Releases" at last: it follows Version Tags from v1.5.0 on.
-    assert following.shown() == (versions("v1.5.0", "v1.5.0"),)
-    assert following.record.tags == {URL: "v1.5.0"}
+    assert tracked.shown() == (versions("v1.5.0", "v1.5.0"),)
+    assert tracked.record.tags == {URL: "v1.5.0"}
 
 
 async def test_a_failing_remote_is_warned_about_once_and_its_return_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    following = Following()
-    following.remote.branch(URL, "dev", "c1")
-    await following.poll(on_ref("dev"))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    await tracked.poll(on_ref("dev"))
 
-    following.remote.failing.add(URL)
-    await following.poll()
-    await following.poll()
-    following.remote.failing.clear()
-    await following.poll()
+    tracked.remote.failing.add(URL)
+    await tracked.poll()
+    await tracked.poll()
+    tracked.remote.failing.clear()
+    await tracked.poll()
 
     assert _logged(caplog) == [
         (
@@ -447,18 +461,55 @@ async def test_a_failing_remote_is_warned_about_once_and_its_return_logged(
     ]
 
 
+async def test_a_failing_remote_of_a_source_following_versions_keeps_its_version_tags(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "v1.0.0", "c1")
+    await tracked.poll(on_ref("v1.0.0"))
+
+    tracked.remote.failing.add(URL)
+    await tracked.poll()
+
+    assert _logged(caplog) == [
+        (
+            "WARNING",
+            (
+                f"node: cannot get the Version Tags of marsrelay, keeping the last "
+                f"ones known: {URL} cannot be reached"
+            ),
+        ),
+    ]
+
+
+async def test_a_poll_whose_block_fails_is_dropped() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    await tracked.poll(on_ref("dev"))
+    tracked.remote.branch(URL, "dev", "c2")
+
+    with pytest.raises(RuntimeError):
+        await tracked.poll(then=RuntimeError("unexpected"))
+    assert tracked.shown() == (ShownSource("marsrelay", "c1", "c1"),)
+
+    # The next poll starts from the last one that was not dropped.
+    tracked.remote.failing.add(URL)
+    await tracked.poll()
+    assert tracked.shown() == (ShownSource("marsrelay", "c1", "c1"),)
+
+
 async def test_a_failing_github_is_warned_about_once_and_its_return_logged(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    following = Following()
-    following.remote.tag(URL, "v1.0.0", "c1")
-    await following.poll(on_ref("v1.0.0"))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "v1.0.0", "c1")
+    await tracked.poll(on_ref("v1.0.0"))
 
-    following.releases.failing.add(URL)
-    await following.poll()
-    await following.poll()
-    following.releases.failing.clear()
-    await following.poll()
+    tracked.releases.failing.add(URL)
+    await tracked.poll()
+    await tracked.poll()
+    tracked.releases.failing.clear()
+    await tracked.poll()
 
     assert _logged(caplog) == [
         (
@@ -476,125 +527,125 @@ async def test_a_failing_github_is_warned_about_once_and_its_return_logged(
 
 
 async def test_new_sources_are_seeded_with_what_they_start_from() -> None:
-    following = Following()
-    following.remote.branch(URL, "dev", "c1")
-    following.remote.tag(OTHER, "v1.0.0", "c2")
-    following.remote.tag(OTHER, "v1.1.0", "c3")
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    tracked.remote.tag(OTHER, "v1.0.0", "c2")
+    tracked.remote.tag(OTHER, "v1.1.0", "c3")
 
-    await following.poll(config(source("dev"), source("v1.0.0", url=OTHER)))
+    await tracked.poll(config(source("dev"), source("v1.0.0", url=OTHER)))
 
-    assert following.record.commits == {f"{URL}@dev": "c1"}
-    assert following.record.tags == {OTHER: "v1.0.0"}
+    assert tracked.record.commits == {f"{URL}@dev": "c1"}
+    assert tracked.record.tags == {OTHER: "v1.0.0"}
 
 
 async def test_removed_sources_are_forgotten() -> None:
-    following = Following()
-    following.remote.branch(URL, "dev", "c1")
-    following.remote.tag(OTHER, "v1.0.0", "c2")
-    await following.poll(config(source("dev"), source("v1.0.0", url=OTHER)))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    tracked.remote.tag(OTHER, "v1.0.0", "c2")
+    await tracked.poll(config(source("dev"), source("v1.0.0", url=OTHER)))
 
-    await following.poll(config())
+    await tracked.poll(config())
 
-    assert following.record.commits == {}
-    assert following.record.tags == {}
+    assert tracked.record.commits == {}
+    assert tracked.record.tags == {}
 
 
 async def test_a_source_added_later_is_seeded_and_offered_its_next_push() -> None:
-    following = Following()
-    following.remote.branch(URL, "dev", "c1")
-    following.remote.branch(OTHER, "dev", "s1")
-    await following.poll(config(source("dev")))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    tracked.remote.branch(OTHER, "dev", "s1")
+    await tracked.poll(config(source("dev")))
 
-    await following.poll(config(source("dev"), source("dev", url=OTHER)))
-    assert following.record.commits == {f"{URL}@dev": "c1", f"{OTHER}@dev": "s1"}
+    await tracked.poll(config(source("dev"), source("dev", url=OTHER)))
+    assert tracked.record.commits == {f"{URL}@dev": "c1", f"{OTHER}@dev": "s1"}
 
-    following.remote.branch(OTHER, "dev", "s2")
-    await following.poll()
+    tracked.remote.branch(OTHER, "dev", "s2")
+    await tracked.poll()
 
-    assert following.followed.changes() == [SourceChange(f"{OTHER}@dev", OTHER, "s1", "s2")]
+    assert tracked.followed.changes() == [SourceChange(f"{OTHER}@dev", OTHER, "s1", "s2")]
 
 
 async def test_an_unset_ref_that_followed_commits_before_starts_from_the_newest_release() -> None:
-    following = Following()
-    following.remote.branch(URL, "main", "c9")
-    following.remote.tag(URL, "v1.4.0", "c1")
-    following.remote.tag(URL, "v1.5.0", "c2")
-    following.releases.release(URL, "v1.4.0")
-    following.releases.release(URL, "v1.5.0")
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "main", "c9")
+    tracked.remote.tag(URL, "v1.4.0", "c1")
+    tracked.remote.tag(URL, "v1.5.0", "c2")
+    tracked.releases.release(URL, "v1.4.0")
+    tracked.releases.release(URL, "v1.5.0")
     # Recorded before the upgrade, when every Unset Ref followed its Latest Commit.
-    following.record.commits[f"{URL}@HEAD"] = "c0"
+    tracked.record.commits[f"{URL}@HEAD"] = "c0"
 
-    await following.poll(on_ref(None))
+    await tracked.poll(on_ref(None))
 
-    assert following.shown() == (versions("v1.5.0", "v1.5.0"),)
-    assert following.record.tags == {URL: "v1.5.0"}
+    assert tracked.shown() == (versions("v1.5.0", "v1.5.0"),)
+    assert tracked.record.tags == {URL: "v1.5.0"}
 
 
 async def test_a_tag_changed_in_the_yaml_by_hand_leaves_the_installed_tag_unchanged() -> None:
-    following = Following()
-    following.remote.tag(URL, "v1.4.0", "c1")
-    following.remote.tag(URL, "v1.5.0", "c2")
-    await following.poll(on_ref("v1.4.0"))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "v1.4.0", "c1")
+    tracked.remote.tag(URL, "v1.5.0", "c2")
+    await tracked.poll(on_ref("v1.4.0"))
 
-    await following.poll(on_ref("v1.5.0"))
+    await tracked.poll(on_ref("v1.5.0"))
 
-    assert following.record.tags == {URL: "v1.4.0"}
-    assert following.shown() == (versions("v1.4.0", "v1.5.0"),)
+    assert tracked.record.tags == {URL: "v1.4.0"}
+    assert tracked.shown() == (versions("v1.4.0", "v1.5.0"),)
 
 
 async def test_a_tag_ref_whose_remote_fails_keeps_its_installed_tag() -> None:
-    following = Following()
-    following.record.tags[URL] = "v1.1.0"
-    following.remote.failing.add(URL)
+    tracked = InMemoryTrackedConfig()
+    tracked.record.tags[URL] = "v1.1.0"
+    tracked.remote.failing.add(URL)
 
-    await following.poll(on_ref("v1.0.0"))
+    await tracked.poll(on_ref("v1.0.0"))
 
-    assert following.record.tags == {URL: "v1.1.0"}
+    assert tracked.record.tags == {URL: "v1.1.0"}
 
 
 # Queries read the installed record when asked.
 
 
 async def test_shown_and_changes_reflect_an_install_recorded_after_the_poll() -> None:
-    following = Following()
-    following.remote.branch(URL, "dev", "c1")
-    await following.poll(on_ref("dev"))
-    following.remote.branch(URL, "dev", "c2")
-    await following.poll()
-    assert following.followed.changes() == [SourceChange(f"{URL}@dev", URL, "c1", "c2")]
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    await tracked.poll(on_ref("dev"))
+    tracked.remote.branch(URL, "dev", "c2")
+    await tracked.poll()
+    assert tracked.followed.changes() == [SourceChange(f"{URL}@dev", URL, "c1", "c2")]
 
-    following.record.commits[f"{URL}@dev"] = "c2"
+    tracked.record.commits[f"{URL}@dev"] = "c2"
 
-    assert following.shown() == (ShownSource("marsrelay", "c2", "c2"),)
-    assert following.followed.changes() == []
+    assert tracked.shown() == (ShownSource("marsrelay", "c2", "c2"),)
+    assert tracked.followed.changes() == []
 
 
 async def test_an_install_plan_after_an_install_with_no_poll_rewrites_nothing() -> None:
-    following = Following()
-    following.remote.branch(URL, "main", "c9")
-    following.remote.tag(URL, "v1.0.0", "c1")
-    await following.poll(on_ref(None))
-    following.remote.tag(URL, "v1.1.0", "c2")
-    await following.poll()
-    assert following.followed.install_plan("OTA", False).rewrites != ()
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "main", "c9")
+    tracked.remote.tag(URL, "v1.0.0", "c1")
+    await tracked.poll(on_ref(None))
+    tracked.remote.tag(URL, "v1.1.0", "c2")
+    await tracked.poll()
+    assert tracked.followed.install_plan("OTA", False).rewrites != ()
 
-    following.record.tags[URL] = "v1.1.0"
+    tracked.record.tags[URL] = "v1.1.0"
 
-    plan = following.followed.install_plan("OTA", False)
+    plan = tracked.followed.install_plan("OTA", False)
     assert plan.rewrites == ()
     assert plan.tags == {URL: "v1.1.0"}
 
 
 async def test_an_install_plan_rewrites_the_files_as_its_poll_read_them() -> None:
-    following = Following()
-    following.remote.tag(URL, "v1.0.0", "c1")
-    following.remote.tag(URL, "v1.1.0", "c2")
-    await following.poll(on_ref("v1.0.0"))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "v1.0.0", "c1")
+    tracked.remote.tag(URL, "v1.1.0", "c2")
+    await tracked.poll(on_ref("v1.0.0"))
     read = "# edited\n" + on_ref("v1.0.0")
 
-    await following.poll(read)
+    await tracked.poll(read)
 
-    assert following.followed.install_plan("192.168.1.2", True) == InstallPlan(
+    assert tracked.followed.install_plan("192.168.1.2", True) == InstallPlan(
         {},
         "192.168.1.2",
         True,
@@ -604,16 +655,16 @@ async def test_an_install_plan_rewrites_the_files_as_its_poll_read_them() -> Non
 
 
 async def test_an_install_plan_moves_a_tag_ref_to_the_newest_release_not_a_newer_tag() -> None:
-    following = Following()
-    following.remote.tag(URL, "v1.4.0", "c1")
-    following.remote.tag(URL, "v1.5.0", "c2")
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "v1.4.0", "c1")
+    tracked.remote.tag(URL, "v1.5.0", "c2")
     # A Version Tag without a Release.
-    following.remote.tag(URL, "v1.7.0", "c3")
-    following.releases.release(URL, "v1.4.0")
-    following.releases.release(URL, "v1.5.0")
-    await following.poll(on_ref("v1.4.0"))
+    tracked.remote.tag(URL, "v1.7.0", "c3")
+    tracked.releases.release(URL, "v1.4.0")
+    tracked.releases.release(URL, "v1.5.0")
+    await tracked.poll(on_ref("v1.4.0"))
 
-    assert following.followed.install_plan("OTA", False) == InstallPlan(
+    assert tracked.followed.install_plan("OTA", False) == InstallPlan(
         {},
         "OTA",
         False,
@@ -623,25 +674,25 @@ async def test_an_install_plan_moves_a_tag_ref_to_the_newest_release_not_a_newer
 
 
 async def test_an_install_plan_leaves_an_unset_ref_unwritten_without_a_newer_version() -> None:
-    following = Following()
-    following.remote.branch(URL, "main", "c9")
-    following.remote.tag(URL, "v1.4.0", "c1")
-    await following.poll(on_ref(None))
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "main", "c9")
+    tracked.remote.tag(URL, "v1.4.0", "c1")
+    await tracked.poll(on_ref(None))
 
-    assert following.followed.install_plan("OTA", False) == InstallPlan(
+    assert tracked.followed.install_plan("OTA", False) == InstallPlan(
         {}, "OTA", False, tags={URL: "v1.4.0"}
     )
 
 
 async def test_an_install_plan_records_a_latest_commit_without_touching_its_ref() -> None:
-    following = Following()
-    following.remote.branch(URL, "main", "c1")
-    following.remote.tag(URL, "v1.0.0", "c0")
-    await following.poll(config(f"  - source: {{type: git, url: {URL}}}\n"))
-    following.remote.branch(URL, "main", "c2")
-    await following.poll()
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "main", "c1")
+    tracked.remote.tag(URL, "v1.0.0", "c0")
+    await tracked.poll(config(f"  - source: {{type: git, url: {URL}}}\n"))
+    tracked.remote.branch(URL, "main", "c2")
+    await tracked.poll()
 
-    assert following.followed.install_plan("OTA", False) == InstallPlan(
+    assert tracked.followed.install_plan("OTA", False) == InstallPlan(
         {f"{URL}@HEAD": "c2"}, "OTA", False
     )
 
@@ -650,27 +701,27 @@ async def test_an_install_plan_records_a_latest_commit_without_touching_its_ref(
 
 
 async def test_only_sources_following_latest_commit_need_refresh_always() -> None:
-    following = Following()
-    following.remote.branch(URL, "dev", "c1")
-    following.remote.tag(OTHER, "v1.0.0", "c2")
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    tracked.remote.tag(OTHER, "v1.0.0", "c2")
 
-    await following.poll(
+    await tracked.poll(
         config(source("dev", refresh="1d"), source("v1.0.0", url=OTHER, refresh="1d"))
     )
 
-    assert following.followed.wrong_refresh_policy() == (GitSource("marsrelay", URL, "dev"),)
+    assert tracked.followed.wrong_refresh_policy() == (GitSource("marsrelay", URL, "dev"),)
 
 
 async def test_an_unset_ref_needs_refresh_always_only_while_it_follows_its_latest_commit() -> None:
-    following = Following()
-    following.remote.branch(URL, "main", "c1")
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "main", "c1")
     # A tag that is no Version Tag does not make it follow versions.
-    following.remote.tag(URL, "stable", "c1")
+    tracked.remote.tag(URL, "stable", "c1")
     unset = on_ref(None).replace("    refresh: always\n", "")
-    await following.poll(unset)
-    assert following.followed.wrong_refresh_policy() == (GitSource("marsrelay", URL, None),)
+    await tracked.poll(unset)
+    assert tracked.followed.wrong_refresh_policy() == (GitSource("marsrelay", URL, None),)
 
-    following.remote.tag(URL, "v1.4.0", "c2")
-    await following.poll()
+    tracked.remote.tag(URL, "v1.4.0", "c2")
+    await tracked.poll()
 
-    assert following.followed.wrong_refresh_policy() == ()
+    assert tracked.followed.wrong_refresh_policy() == ()

@@ -43,21 +43,21 @@ class RemoteTags:
 _TAGS = "refs/tags/"
 
 
-async def resolve_ref(url: str, ref: str | None) -> RemoteRef:
-    """Ask the remote at *url* what *ref* (None: its default branch) points to."""
-    found = (await _resolve(url, ref, tags=False)).ref
-    if found is None:
-        raise GitRemoteError(f"{url} has no branch or tag {ref}")
-    return found
-
-
 class LsRemote:
     """Asks each remote with `git ls-remote`: the remote port of `FollowedSources`."""
 
-    async def resolve(self, url: str, ref: str | None, *, tags: bool) -> RemoteTags:
-        """What *ref* (None: the default branch) points to at *url*, with every tag
-        listed if *tags*, else at most *ref*'s, in one call."""
-        return await _resolve(url, ref, tags=tags)
+    async def resolve_ref(self, url: str, ref: str | None) -> RemoteRef:
+        """What *ref* (None: the default branch) points to at *url*; raises
+        GitRemoteError if the remote has no such ref."""
+        found = (await _resolve(url, ref, tags=False)).ref
+        if found is None:
+            raise GitRemoteError(f"{url} has no branch or tag {ref}")
+        return found
+
+    async def resolve_ref_and_tags(self, url: str, ref: str | None) -> RemoteTags:
+        """What *ref* (None: the default branch) points to at *url*, if anything, with
+        every tag the remote has, in one call."""
+        return await _resolve(url, ref, tags=True)
 
 
 async def _resolve(url: str, ref: str | None, *, tags: bool) -> RemoteTags:
