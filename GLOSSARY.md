@@ -32,6 +32,10 @@ _Avoid_: dependency, input
 An `external_components` or remote `packages:` entry of a Tracked Config that points at a git repository and ref.
 _Avoid_: component, repo, external component (when meaning the source)
 
+**Followed Source**:
+A Git Source as last seen on its remote, together with what it follows (Releases, Version Tags or Latest Commit), which is decided anew on every poll.
+_Avoid_: source state, tracked source
+
 **Floating Ref**:
 A Git Source ref that names a branch, or a tag that is not a Version Tag, so its commit can move over time; it is followed by Latest Commit and never rewritten.
 _Avoid_: unpinned, moving ref
