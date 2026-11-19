@@ -51,10 +51,13 @@ async def resolve_ref(url: str, ref: str | None) -> RemoteRef:
     return found
 
 
-async def resolve_ref_and_tags(url: str, ref: str | None) -> RemoteTags:
-    """Ask the remote at *url* what *ref* (None: its default branch) points to, and
-    list all its tags, in one call."""
-    return await _resolve(url, ref, tags=True)
+class LsRemote:
+    """Asks each remote with `git ls-remote`: the remote port of `FollowedSources`."""
+
+    async def resolve(self, url: str, ref: str | None, *, tags: bool) -> RemoteTags:
+        """What *ref* (None: the default branch) points to at *url*, with every tag
+        listed if *tags*, else at most *ref*'s, in one call."""
+        return await _resolve(url, ref, tags=tags)
 
 
 async def _resolve(url: str, ref: str | None, *, tags: bool) -> RemoteTags:

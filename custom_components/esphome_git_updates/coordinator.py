@@ -96,8 +96,8 @@ class TrackedConfigStore:
         """The Installed Commit of the Git Source with *source_key*, if any."""
         return self._data.get("installed_commits", {}).get(source_key)
 
-    async def async_seed_installed_commits(
-        self, latest_commits: Mapping[str, str], present: Collection[str]
+    async def async_seed_commits(
+        self, seeds: Mapping[str, str], present: Collection[str]
     ) -> None:
         """Seed Git Sources that have no Installed Commit yet with their Latest Commit.
 
@@ -106,7 +106,7 @@ class TrackedConfigStore:
         """
         recorded = self._data.get("installed_commits", {})
         commits = {key: sha for key, sha in recorded.items() if key in present}
-        for key, sha in latest_commits.items():
+        for key, sha in seeds.items():
             commits.setdefault(key, sha)
         if commits != recorded:
             self._data["installed_commits"] = commits
@@ -116,14 +116,12 @@ class TrackedConfigStore:
         """The Installed Tag of the Git Source following versions at *url*, if any."""
         return self._data.get("installed_tags", {}).get(url)
 
-    async def async_seed_installed_tags(
-        self, tags: Mapping[str, str], present: Collection[str]
-    ) -> None:
-        """Seed Git Sources following versions that have no Installed Tag yet with *tags*
+    async def async_seed_tags(self, seeds: Mapping[str, str], present: Collection[str]) -> None:
+        """Seed Git Sources following versions that have no Installed Tag yet with *seeds*
         (by repository URL), and forget those no longer in the YAML (not in *present*)."""
         recorded = self._data.get("installed_tags", {})
         installed = {url: tag for url, tag in recorded.items() if url in present}
-        for url, tag in tags.items():
+        for url, tag in seeds.items():
             installed.setdefault(url, tag)
         if installed != recorded:
             self._data["installed_tags"] = installed

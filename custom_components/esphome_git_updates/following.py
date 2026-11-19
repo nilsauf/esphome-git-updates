@@ -1,24 +1,54 @@
-"""What each tracked Git Source follows, as last seen on its remote, and what that
-means for the update entity and for an Install.
+"""The Followed Sources of one Tracked Config: what each Git Source follows, as last
+seen on its remote, and what that means for the update entity and for an Install.
 
-A Source follows either its Latest Commit (`CommitFollowingSource`) or versions
-(`VersionFollowingSource`). Both answer the same questions, given what the
-integration recorded as installed: what the entity shows, which commits to
-compare for release notes, and what an Install records and rewrites.
+`FollowedSources` polls each Source's remote, and GitHub for the Releases of
+those following versions, and decides anew on every poll what each follows: a
+Tag Ref follows Releases, else Version Tags; an Unset Ref follows Releases,
+else Version Tags, else its Latest Commit; a Floating Ref, or a Tag Ref that
+turns out to be a branch, follows its Latest Commit. It seeds the installed
+record with what new Sources start from, and forgets removed ones (ADR-0003).
+
+No Home Assistant imports: the remote, GitHub and the installed record are
+ports handed in.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+import asyncio
+import logging
+from collections.abc import Collection, Iterable, Mapping
+from dataclasses import dataclass, replace
+from types import MappingProxyType
 from typing import Protocol
 
 from .comparisons import SourceChange
-from .git_sources import GitSource, RefLocation, rewritten
-from .github import Comparison, Release
+from .git_remote import GitRemoteError, RemoteRefKind, RemoteTags
+from .git_sources import Discovery, GitSource, RefKind, RefLocation, rewritten
+from .github import Comparison, GitHubError, Release
 from .install import InstallPlan, YamlRewrite
 from .version_tags import Version
+from .version_tags import is_version_tag
 from .versions import ShownSource
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class Remote(Protocol):
+    """A Source's git remote."""
+
+    async def resolve(self, url: str, ref: str | None, *, tags: bool) -> RemoteTags:
+        """What *ref* (None: the default branch) points to at *url*, with every tag
+        listed if *tags*; raises GitRemoteError if the remote cannot be asked."""
+        ...
+
+
+class Releases(Protocol):
+    """GitHub's Releases of a repository."""
+
+    async def releases(self, url: str) -> tuple[Release, ...]:
+        """The Releases of the repository at *url*: empty when it has none or is not on
+        GitHub; raises GitHubError if GitHub cannot be asked."""
+        ...
 
 
 class InstalledVersions(Protocol):
@@ -27,6 +57,22 @@ class InstalledVersions(Protocol):
     def installed_commit(self, source_key: str) -> str | None: ...
 
     def installed_tag(self, url: str) -> str | None: ...
+
+
+class InstalledRecord(InstalledVersions, Protocol):
+    """The installed record, which new Sources are seeded into (ADR-0003)."""
+
+    async def async_seed_commits(
+        self, seeds: Mapping[str, str], present: Collection[str]
+    ) -> None:
+        """Record *seeds* (by key) where no Installed Commit is recorded yet, and forget
+        every key not in *present*."""
+        ...
+
+    async def async_seed_tags(self, seeds: Mapping[str, str], present: Collection[str]) -> None:
+        """Record *seeds* (by url) where no Installed Tag is recorded yet, and forget
+        every url not in *present*."""
+        ...
 
 
 class Comparisons(Protocol):
@@ -40,7 +86,7 @@ RefMove = tuple[RefLocation, str]
 
 
 @dataclass(frozen=True)
-class CommitFollowingSource:
+class _CommitFollowingSource:
     """A Git Source following its Latest Commit (a Floating Ref, or an Unset Ref), with
     the Latest Commit last seen on its remote."""
 
@@ -76,7 +122,7 @@ class CommitFollowingSource:
 
 
 @dataclass(frozen=True)
-class VersionFollowingSource:
+class _VersionFollowingSource:
     """A Git Source following versions (a Tag Ref, or an Unset Ref on a remote with
     Version Tags), with the Version Tags last seen on its remote and its
     repository's Releases."""
@@ -184,11 +230,11 @@ class VersionFollowingSource:
         )
 
 
-type FollowedSource = CommitFollowingSource | VersionFollowingSource
+type _FollowedSource = _CommitFollowingSource | _VersionFollowingSource
 
 
 def _change(
-    state: FollowedSource, installed: str | None, latest: str | None
+    state: _FollowedSource, installed: str | None, latest: str | None
 ) -> SourceChange | None:
     """The change between two commits of *state*, if both are known and differ."""
     if installed is None or latest is None or installed == latest:
@@ -196,8 +242,8 @@ def _change(
     return SourceChange(state.key, state.source.url, installed, latest)
 
 
-def plan_install(
-    followed: Iterable[FollowedSource],
+def _plan_install(
+    followed: Iterable[_FollowedSource],
     installed: InstalledVersions,
     files: Mapping[str, str],
     port: str,
@@ -219,3 +265,229 @@ def plan_install(
         for file, edits in moves.items()
     )
     return InstallPlan(commits, port, clean_build, tags=tags, rewrites=rewrites)
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """What one poll saw: compare two to tell whether anything changed."""
+
+    # Each Followed Source by key: `url@ref` following Latest Commit, `url`
+    # following versions (an Install rewrites the ref, ADR-0007).
+    _followed: Mapping[str, _FollowedSource]
+    # The text of each file read, by path, which an Install rewrites.
+    _files: Mapping[str, str]
+    # The Sources whose Refresh Policy lets ESPHome build a stale cached clone.
+    _wrong_refresh_policy: tuple[GitSource, ...]
+
+
+_NOTHING_POLLED = Snapshot(MappingProxyType({}), MappingProxyType({}), ())
+
+
+class FollowedSources:
+    """The Followed Sources of one Tracked Config, polled from their remotes and GitHub.
+
+    A remote that cannot be asked keeps what was last known of it, and GitHub
+    that cannot be asked keeps its last answer, so a Source does not flip
+    between following Releases and Version Tags (ADR-0007). Each query combines
+    the last poll with the installed record as it is when asked.
+    """
+
+    def __init__(
+        self, remote: Remote, releases: Releases, record: InstalledRecord, title: str
+    ) -> None:
+        self._remote = remote
+        self._releases = releases
+        self._record = record
+        self._title = title
+        self._last = _NOTHING_POLLED
+        # Each repository's Releases at GitHub's last answer, by url.
+        self._answers: dict[str, tuple[Release, ...]] = {}
+        # The keys of Sources whose remote failed, and the urls GitHub failed for.
+        self._failing_remotes: set[str] = set()
+        self._failing_releases: set[str] = set()
+
+    async def async_poll(self, discovery: Discovery, files: Mapping[str, str]) -> Snapshot:
+        """Ask the remote of each Source *discovery* found, and GitHub for the Releases of
+        each following versions; seed new Sources and forget removed ones (ADR-0003).
+
+        *files* is the text of each file *discovery* was read from, by path.
+        """
+        previous = self._last._followed
+        results = await asyncio.gather(
+            *(self._ask_remote(source) for source in discovery.sources),
+            return_exceptions=True,
+        )
+        followed: dict[str, _FollowedSource] = {}
+        for source, result in zip(discovery.sources, results, strict=True):
+            if isinstance(result, GitRemoteError):
+                self._log_remote_failure(source, result)
+                # It may have switched between following Latest Commit and versions.
+                kept = previous.get(source.key) or previous.get(source.url)
+                if kept is not None:
+                    followed[kept.key] = replace(kept, source=source)
+                continue
+            if isinstance(result, BaseException):
+                raise result
+            self._log_remote_recovery(source)
+            followed[result.key] = result
+        followed = await self._with_releases(followed)
+        await self._seed(discovery, followed)
+        self._last = Snapshot(
+            MappingProxyType(followed),
+            MappingProxyType(dict(files)),
+            discovery.wrong_refresh_policy,
+        )
+        return self._last
+
+    def shown(self, comparisons: Comparisons) -> tuple[ShownSource, ...]:
+        """Each Followed Source, installed against latest, as the entity shows it."""
+        return tuple(
+            state.shown(self._record, comparisons) for state in self._last._followed.values()
+        )
+
+    def changes(self) -> list[SourceChange]:
+        """The Followed Sources with an update whose two commits are known."""
+        return [
+            change
+            for state in self._last._followed.values()
+            if (change := state.change(self._record))
+        ]
+
+    def install_plan(self, port: str, clean_build: bool) -> InstallPlan:
+        """An Install of what the last poll showed: it records the Latest Commits and
+        versions shown (ADR-0003), after moving each ref to the version shown
+        (ADR-0007) in the files as that poll read them."""
+        return _plan_install(
+            self._last._followed.values(), self._record, self._last._files, port, clean_build
+        )
+
+    def wrong_refresh_policy(self) -> tuple[GitSource, ...]:
+        """The Sources of the last poll whose Refresh Policy lets ESPHome build a stale
+        clone of them.
+
+        Only a Source following Latest Commit can be: a Pinned Ref never moves,
+        and a changed tag is a new `url@ref` in ESPHome's clone cache (ADR-0004).
+        """
+        following_commits = _latest_commits(self._last._followed.values())
+        return tuple(
+            source
+            for source in self._last._wrong_refresh_policy
+            if source.key in following_commits
+        )
+
+    async def _ask_remote(self, source: GitSource) -> _FollowedSource:
+        """What *source*'s remote holds of what the Source follows.
+
+        A Tag Ref follows the remote's Version Tags; but only the remote can tell
+        a branch from a tag, and a Tag Ref that is a branch follows its Latest
+        Commit, as a Floating Ref does. An Unset Ref follows versions while its
+        remote has a Version Tag (a Release's tag is one) and an Install can
+        insert its ref; else its Latest Commit.
+        """
+        if source.kind is RefKind.UNSET and source.written_at:
+            remote = await self._remote.resolve(source.url, None, tags=True)
+            versions = _version_tags(remote.tags)
+            if not versions and remote.ref is not None:
+                return _CommitFollowingSource(source, remote.ref.commit)
+            return _VersionFollowingSource(source, versions)
+        if source.kind is not RefKind.TAG or source.ref is None:
+            found = (await self._remote.resolve(source.url, source.ref, tags=False)).ref
+            if found is None:
+                raise GitRemoteError(f"{source.url} has no branch or tag {source.ref}")
+            return _CommitFollowingSource(source, found.commit)
+        remote = await self._remote.resolve(source.url, source.ref, tags=True)
+        if remote.ref is not None and remote.ref.kind is RemoteRefKind.BRANCH:
+            return _CommitFollowingSource(source, remote.ref.commit)
+        return _VersionFollowingSource(source, _version_tags(remote.tags))
+
+    async def _with_releases(
+        self, followed: dict[str, _FollowedSource]
+    ) -> dict[str, _FollowedSource]:
+        """*followed*, each Source following versions with its repository's Releases at
+        GitHub's last answer; the answers for any other repository are forgotten."""
+        urls = [state.key for state in _following_versions(followed.values())]
+        results = await asyncio.gather(
+            *(self._releases.releases(url) for url in urls), return_exceptions=True
+        )
+        answers = {url: self._answers[url] for url in urls if url in self._answers}
+        for url, result in zip(urls, results, strict=True):
+            if isinstance(result, GitHubError):
+                self._log_releases_failure(url, result)
+            elif isinstance(result, BaseException):
+                raise result
+            else:
+                self._log_releases_recovery(url)
+                answers[url] = result
+        self._answers = answers
+        self._failing_releases &= set(urls)
+        return {
+            key: (
+                replace(state, releases=answers.get(state.key))
+                if isinstance(state, _VersionFollowingSource)
+                else state
+            )
+            for key, state in followed.items()
+        }
+
+    async def _seed(self, discovery: Discovery, followed: Mapping[str, _FollowedSource]) -> None:
+        """Seed new Sources and forget removed ones (ADR-0003).
+
+        A Source following Latest Commit starts from the one seen; a Tag Ref from
+        the tag the YAML names, kept while its remote cannot be asked; an Unset
+        Ref following versions from the version it follows.
+        """
+        await self._record.async_seed_commits(
+            _latest_commits(followed.values()), {source.key for source in discovery.sources}
+        )
+        versioned = _following_versions(followed.values())
+        await self._record.async_seed_tags(
+            {state.key: seed for state in versioned if (seed := state.seed())},
+            {state.key for state in versioned}
+            | {source.url for source in discovery.sources if source.kind is RefKind.TAG},
+        )
+
+    def _log_remote_failure(self, source: GitSource, err: GitRemoteError) -> None:
+        if source.key not in self._failing_remotes:
+            _LOGGER.warning(
+                "%s: cannot get the Latest Commit of %s, keeping the last one known: %s",
+                self._title,
+                source.name,
+                err,
+            )
+        self._failing_remotes.add(source.key)
+
+    def _log_remote_recovery(self, source: GitSource) -> None:
+        if source.key in self._failing_remotes:
+            _LOGGER.info("%s: %s is reachable again", self._title, source.name)
+        self._failing_remotes.discard(source.key)
+
+    def _log_releases_failure(self, url: str, err: GitHubError) -> None:
+        if url not in self._failing_releases:
+            _LOGGER.warning(
+                "%s: cannot ask GitHub for the Releases of %s, keeping the last answer: %s",
+                self._title,
+                url,
+                err,
+            )
+        self._failing_releases.add(url)
+
+    def _log_releases_recovery(self, url: str) -> None:
+        if url in self._failing_releases:
+            _LOGGER.info("%s: GitHub lists the Releases of %s again", self._title, url)
+        self._failing_releases.discard(url)
+
+
+def _version_tags(tags: Mapping[str, str]) -> dict[str, str]:
+    return {tag: commit for tag, commit in tags.items() if is_version_tag(tag)}
+
+
+def _latest_commits(followed: Iterable[_FollowedSource]) -> dict[str, str]:
+    """The Latest Commit of each Source following one, by key."""
+    commits: dict[str, str] = {}
+    for state in followed:
+        commits.update(state.recorded_commits())
+    return commits
+
+
+def _following_versions(followed: Iterable[_FollowedSource]) -> list[_VersionFollowingSource]:
+    return [state for state in followed if isinstance(state, _VersionFollowingSource)]
