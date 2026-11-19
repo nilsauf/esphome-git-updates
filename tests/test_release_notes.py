@@ -1,7 +1,10 @@
-"""Release notes: what changed in each Source since it was installed.
+"""Release notes: what changed in each Source since it was installed, wired to GitHub.
 
 A GitHub Source's remote is a real repository on disk that git reaches
-through `url.<path>.insteadOf`, and the fake GitHub API compares its commits.
+through `url.<path>.insteadOf`, and the fake GitHub API compares its commits and
+lists the Releases a test publishes. Paging, the token and GitHub's failures are
+tested against the GitHub adapter in `test_github.py`; comparison caching and
+keeping GitHub's last answer against `FollowedSources` in `test_following.py`.
 """
 
 from __future__ import annotations
@@ -14,7 +17,6 @@ from freezegun.api import FrozenDateTimeFactory
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
-from custom_components.esphome_git_updates import github
 from fake_device_builder import FakeDeviceBuilder, serve, server_info
 from fake_github import GITHUB_URL, FakeGitHub
 from git_repo import GitRepo
@@ -22,25 +24,26 @@ from tracked_config import CONFIGURATION, ENTITY_ID, OTA, set_up, tick
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
+REPO = "nilsauf/marsrelay"
 
-def _config(url: str) -> str:
+
+def _config(ref: str | None = None) -> str:
+    """A Tracked Config following marsrelay on GitHub at *ref* (None: its main)."""
+    follow = f"  ref: {ref}\n" if ref is not None else "refresh: always\n"
     return (
         f"esphome:\n  name: host-node\n{OTA}external_components:\n"
-        f"  - source:\n      type: git\n      url: {url}\n    refresh: always\n"
+        f"  - source:\n      type: git\n      url: {GITHUB_URL}\n    {follow}"
     )
 
 
-async def _builder(url: str) -> AsyncIterator[FakeDeviceBuilder]:
-    async with serve(
-        [server_info(esphome_version="2026.10.1")], {CONFIGURATION: _config(url)}
-    ) as (_, fake):
-        yield fake
-
-
 @pytest.fixture
-async def builder(on_github: None) -> AsyncIterator[FakeDeviceBuilder]:
-    """A Device Builder whose config tracks marsrelay's main on GitHub."""
-    async for fake in _builder(GITHUB_URL):
+async def builder(on_github: None, fake_github: FakeGitHub) -> AsyncIterator[FakeDeviceBuilder]:
+    """A Device Builder whose config tracks marsrelay's main on GitHub, which the fake
+    GitHub answers for."""
+    async with serve([server_info(esphome_version="2026.10.1")], {CONFIGURATION: _config()}) as (
+        _,
+        fake,
+    ):
         yield fake
 
 
@@ -63,7 +66,6 @@ def _summary(hass: HomeAssistant) -> str | None:
 async def test_a_github_source_lists_its_commits_since_the_installed_one(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
-    fake_github: FakeGitHub,
     marsrelay: GitRepo,
     freezer: FrozenDateTimeFactory,
     hass_ws_client: WebSocketGenerator,
@@ -85,138 +87,86 @@ async def test_a_github_source_lists_its_commits_since_the_installed_one(
         f"- [`{debounce[:7]}`]({commit_url}{debounce}) Fix debounce\n"
         f"- [`{latest[:7]}`]({commit_url}{latest}) Bump version"
     )
-    # Unchanged at setup, so only asked once, after the push.
-    assert fake_github.authorizations == [None]
 
 
-async def test_the_github_token_option_is_sent_with_the_compare_request(
+async def test_release_notes_show_each_newer_release_newest_first(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    fake_github: FakeGitHub,
+    marsrelay: GitRepo,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    for tag in ("v1.4.0", "v1.10.0", "v1.5.0", "v1.11.0"):
+        marsrelay.push()
+        marsrelay.tag(tag)
+    fake_github.release(REPO, "v1.4.0", title="Installed", body="Not shown.")
+    # Published after v1.10.0, but older.
+    fake_github.release(REPO, "v1.10.0", title="Ten", body="- Fix debounce")
+    fake_github.release(REPO, "v1.5.0", title="Five", body="- Add relay")
+    fake_github.release(REPO, "v1.11.0", title="Eleven", body="Not released.", draft=True)
+    builder.files[CONFIGURATION] = _config("v1.4.0")
+
+    await set_up(hass, builder)
+
+    # The Releases' text replaces the commit list.
+    assert await _release_notes(hass, hass_ws_client) == (
+        "### marsrelay\nv1.4.0 → v1.10.0 (1 commit)"
+        "\n\n#### [Ten](https://github.com/nilsauf/marsrelay/releases/tag/v1.10.0)\n"
+        "- Fix debounce\n\n"
+        "#### [Five](https://github.com/nilsauf/marsrelay/releases/tag/v1.5.0)\n"
+        "- Add relay"
+    )
+
+
+async def test_a_github_token_set_without_reloading_the_entry_is_sent_with_the_next_request(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
     fake_github: FakeGitHub,
     marsrelay: GitRepo,
     freezer: FrozenDateTimeFactory,
 ) -> None:
-    await set_up(hass, builder, options={"github_token": "ghp_secret"})
+    entry = await set_up(hass, builder)
     marsrelay.push()
+    await tick(hass, freezer, 30.1)
+    assert fake_github.authorizations == [None]
 
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "clean_build": False,
+            "git_poll_interval": 30,
+            "upload_address": "OTA",
+            "github_token": "ghp_secret",
+        },
+    )
+    await hass.async_block_till_done()
+    marsrelay.push()
     await tick(hass, freezer, 30.1)
 
-    assert fake_github.authorizations == ["Bearer ghp_secret"]
+    assert fake_github.authorizations == [None, "Bearer ghp_secret"]
 
 
-async def test_a_failing_github_api_falls_back_to_the_sha_change_and_is_asked_again(
+async def test_opening_release_notes_asks_github_again_for_a_missing_comparison(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
     fake_github: FakeGitHub,
     marsrelay: GitRepo,
     freezer: FrozenDateTimeFactory,
     hass_ws_client: WebSocketGenerator,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     installed = marsrelay.latest_commit()
     await set_up(hass, builder)
     latest = marsrelay.push(message="Fix debounce")
     fake_github.failure = 403
-
     await tick(hass, freezer, 30.1)
-
-    assert _summary(hass) == f"marsrelay {installed[:7]} → {latest[:7]}"
     assert await _release_notes(hass, hass_ws_client) == (
         f"### marsrelay\n{installed[:7]} → {latest[:7]}"
     )
-    assert "API rate limit exceeded" in caplog.text
 
     fake_github.failure = None
     notes = await _release_notes(hass, hass_ws_client)
 
     assert notes is not None and notes.endswith(") Fix debounce")
+    # The entity is refreshed with the comparison that arrived.
     assert _summary(hass) == f"marsrelay {installed[:7]} → {latest[:7]} (1 commit)"
-
-
-async def test_github_that_cannot_be_reached_falls_back_to_the_sha_change(
-    hass: HomeAssistant,
-    builder: FakeDeviceBuilder,
-    marsrelay: GitRepo,
-    freezer: FrozenDateTimeFactory,
-    hass_ws_client: WebSocketGenerator,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Nothing listens on port 1.
-    monkeypatch.setattr(github, "GITHUB_API", "http://127.0.0.1:1")
-    installed = marsrelay.latest_commit()
-    await set_up(hass, builder)
-    latest = marsrelay.push()
-
-    await tick(hass, freezer, 30.1)
-
-    assert await _release_notes(hass, hass_ws_client) == (
-        f"### marsrelay\n{installed[:7]} → {latest[:7]}"
-    )
-
-
-async def test_a_remote_not_on_github_shows_the_sha_change_without_asking_github(
-    hass: HomeAssistant,
-    fake_github: FakeGitHub,
-    marsrelay: GitRepo,
-    freezer: FrozenDateTimeFactory,
-    hass_ws_client: WebSocketGenerator,
-) -> None:
-    installed = marsrelay.latest_commit()
-    async for builder in _builder(marsrelay.url):
-        await set_up(hass, builder)
-        latest = marsrelay.push()
-
-        await tick(hass, freezer, 30.1)
-
-        assert _summary(hass) == f"marsrelay {installed[:7]} → {latest[:7]}"
-        assert await _release_notes(hass, hass_ws_client) == (
-            f"### marsrelay\n{installed[:7]} → {latest[:7]}"
-        )
-    assert fake_github.authorizations == []
-
-
-async def test_a_tag_ref_on_github_lists_the_commits_between_the_two_tags(
-    hass: HomeAssistant,
-    builder: FakeDeviceBuilder,
-    fake_github: FakeGitHub,
-    marsrelay: GitRepo,
-    hass_ws_client: WebSocketGenerator,
-) -> None:
-    marsrelay.tag("v1.4.0")
-    fix = marsrelay.push(message="Fix debounce")
-    marsrelay.tag("v1.5.0")
-    # Past the followed tag: not part of the notes.
-    marsrelay.push(message="Unreleased work")
-    builder.files[CONFIGURATION] = (
-        f"esphome:\n  name: host-node\n{OTA}external_components:\n"
-        f"  - source:\n      type: git\n      url: {GITHUB_URL}\n      ref: v1.4.0\n"
-    )
-
-    await set_up(hass, builder)
-
-    assert _summary(hass) == "marsrelay v1.4.0 → v1.5.0 (1 commit)"
-    commit_url = "https://github.com/nilsauf/marsrelay/commit/"
-    assert await _release_notes(hass, hass_ws_client) == (
-        "### marsrelay\nv1.4.0 → v1.5.0 (1 commit)\n\n"
-        f"- [`{fix[:7]}`]({commit_url}{fix}) Fix debounce"
-    )
-
-
-async def test_a_tag_ref_off_github_shows_only_the_version_change(
-    hass: HomeAssistant,
-    fake_github: FakeGitHub,
-    marsrelay: GitRepo,
-    hass_ws_client: WebSocketGenerator,
-) -> None:
-    marsrelay.tag("v1.4.0")
-    marsrelay.push()
-    marsrelay.tag("v1.5.0")
-    async for builder in _builder(marsrelay.url):
-        builder.files[CONFIGURATION] = (
-            f"esphome:\n  name: host-node\n{OTA}external_components:\n"
-            f"  - source:\n      type: git\n      url: {marsrelay.url}\n      ref: v1.4.0\n"
-        )
-        await set_up(hass, builder)
-
-        assert await _release_notes(hass, hass_ws_client) == "### marsrelay\nv1.4.0 → v1.5.0"
-    assert fake_github.authorizations == []

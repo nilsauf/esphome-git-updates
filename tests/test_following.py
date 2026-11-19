@@ -89,6 +89,8 @@ class InMemoryGitHub:
         self.failing: set[str] = set()
         # Whether GitHub cannot compare.
         self.compare_failing = False
+        # Raised by the next compare, as an unexpected error would be.
+        self.compare_raises: Exception | None = None
 
     def release(self, url: str, tag: str) -> Release:
         release = Release(tag, f"Release {tag}", "", f"{url}/releases/{tag}", False, False)
@@ -108,6 +110,9 @@ class InMemoryGitHub:
 
     async def compare(self, url: str, base: str, head: str) -> Comparison | None:
         self.compared.append((url, base, head))
+        if self.compare_raises is not None:
+            raised, self.compare_raises = self.compare_raises, None
+            raise raised
         if self.compare_failing:
             raise GitHubError("GitHub cannot be reached")
         return self.comparisons.get((url, base, head))
@@ -574,6 +579,19 @@ async def test_a_change_is_compared_during_a_poll_and_shown_with_its_commits() -
     assert tracked.shown() == (ShownSource("marsrelay", "c1", "c2", comparison),)
 
 
+async def test_a_tag_ref_is_compared_between_the_commits_of_its_two_tags() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "v1.4.0", "c1")
+    tracked.remote.tag(URL, "v1.5.0", "c2")
+    comparison = tracked.github.comparison(URL, "c1", "c2")
+
+    await tracked.poll(on_ref("v1.4.0"))
+
+    assert tracked.shown() == (
+        ShownSource("marsrelay", "v1.4.0", "v1.5.0", comparison, versions=True),
+    )
+
+
 async def test_a_change_is_compared_once_while_its_commits_stay_the_same() -> None:
     tracked = InMemoryTrackedConfig()
     tracked.remote.branch(URL, "dev", "c1")
@@ -660,6 +678,23 @@ async def test_a_compare_failure_does_not_fail_the_poll() -> None:
 
     assert tracked.shown() == (ShownSource("marsrelay", "c1", "c2"),)
     assert tracked.followed.changes() == [SourceChange(f"{URL}@dev", URL, "c1", "c2")]
+
+
+async def test_an_unexpected_compare_error_fails_the_poll_and_drops_it() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    await tracked.poll(on_ref("dev"))
+    tracked.remote.branch(URL, "dev", "c2")
+    tracked.github.compare_raises = RuntimeError("unexpected")
+
+    with pytest.raises(RuntimeError):
+        await tracked.poll()
+    assert tracked.shown() == (ShownSource("marsrelay", "c1", "c1"),)
+
+    # The next poll starts from the last one that was not dropped.
+    tracked.remote.failing.add(URL)
+    await tracked.poll()
+    assert tracked.shown() == (ShownSource("marsrelay", "c1", "c1"),)
 
 
 async def test_a_failing_compare_is_warned_about_once_and_its_return_logged(

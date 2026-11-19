@@ -295,30 +295,6 @@ async def test_a_device_builder_that_cannot_be_reached_fails_the_git_poll_withou
     assert list(issue_registry.issues) == []
 
 
-async def test_a_poll_that_fails_after_asking_the_remotes_keeps_what_the_last_poll_saw(
-    hass: HomeAssistant, builder: FakeDeviceBuilder, marsrelay: GitRepo
-) -> None:
-    entry = await set_up(hass, builder)
-    git = entry.runtime_data.git_coordinator
-    compare = git._followed.async_compare_missing
-
-    async def fail_once() -> bool:
-        git._followed.async_compare_missing = compare
-        raise RuntimeError("unexpected")
-
-    git._followed.async_compare_missing = fail_once
-    marsrelay.push()
-    await git.async_refresh()
-    assert not git.last_update_success
-    # The remote cannot be asked: the Latest Commit last known is kept.
-    marsrelay.path.rename(marsrelay.path.with_name("gone"))
-
-    await git.async_refresh()
-
-    assert git.last_update_success
-    assert _state(hass).state == STATE_OFF
-
-
 async def test_a_renamed_entry_logs_under_its_new_title(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
