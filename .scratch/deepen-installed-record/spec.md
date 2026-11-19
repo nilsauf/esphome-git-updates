@@ -1,6 +1,6 @@
 # One Installed Record module: spec
 
-Status: ready-for-agent
+Status: resolved
 
 Terms are defined in `GLOSSARY.md`. Relevant decisions: ADR-0002 (an Install is followed through the Device Builder, and re-attached after a restart), ADR-0003 (the integration records Installed Commits and the Installed ESPHome Version, and seeds them), ADR-0005 (one combined entity on the Linked Device), ADR-0007 (Installed Tags, keyed by repository so they survive a rewritten ref).
 
