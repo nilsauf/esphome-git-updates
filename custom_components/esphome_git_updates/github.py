@@ -1,7 +1,13 @@
-"""What GitHub's API knows of a repository: the commits between two shas, for release
-notes, and its releases. `GitHub` asks both by a Git Source's url.
+"""The GitHub adapter: what GitHub knows of a Git Source's repository, asked by its url.
 
-No Home Assistant imports: this asks GitHub's API, nothing more.
+`GitHub` gives the repository's Releases (drafts, prereleases and tags that are not
+Version Tags left out), paging past a first page that holds no Release up to a
+limit and warning once when that limit is reached; and the commits between two
+shas, for release notes. A url not on GitHub has no Releases and no comparison,
+without a request.
+
+No Home Assistant imports, and nothing cached: what to keep of GitHub's answers
+is the caller's to decide.
 """
 
 from __future__ import annotations
