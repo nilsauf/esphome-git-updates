@@ -80,34 +80,36 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
         )
 
     async def _async_update_data(self) -> Snapshot:
-        discovery, files = await self._discover()
-        self._log_untrackable(discovery.untrackable)
-        # A poll that fails from here on changes nothing it saw.
-        async with self._followed.async_poll(discovery, files) as snapshot:
-            self._pre_install_issues.report(snapshot.check)
-            await self.comparisons.async_update(self._followed.changes())
-        return snapshot
+        return await self._async_poll_now()
 
-    async def async_check_before_install(self) -> None:
-        """Read the YAML again and raise HomeAssistantError if an Install must be refused.
+    async def async_prepare_install(self, options: Options, device_offline: bool) -> InstallPlan:
+        """Read the YAML again and plan an Install of what that read shows.
 
-        It is refused when the YAML cannot be read, or when a pre-install check fails.
+        Raises HomeAssistantError when the Install is refused: the device looks
+        offline (the Device Builder would only defer the Install), the YAML
+        cannot be read, or a pre-install check fails.
+
+        The plan records the Latest Commits and versions this read showed
+        (ADR-0003), after moving each Tag Ref as it saw them (ADR-0007): what
+        gets recorded is what the check just read, not what the remote holds
+        once the build is done, so a push during the build stays an update.
         """
         title = self.config_entry.title
-        await self.async_refresh()
-        if not self.last_update_success:
+        if device_offline:
+            raise HomeAssistantError(
+                f"Install of {title} refused: device offline "
+                "(every entity of its Linked Device is unavailable)"
+            )
+        try:
+            snapshot = await self._async_poll_now()
+        except Exception as err:
+            # As after a failed scheduled poll, the last good poll stays.
             raise HomeAssistantError(
                 f"Install of {title} refused: cannot read its YAML to check "
-                f"it before installing: {self.last_exception}"
-            )
-        if (refusal := self.data.check.refusal(title)) is not None:
-            raise HomeAssistantError(refusal.message)
-
-    def install_plan(self, port: str, clean_build: bool) -> InstallPlan:
-        """An Install of what the last poll showed: it records the Latest Commits and
-        versions shown (ADR-0003), after moving each Tag Ref to the version shown
-        (ADR-0007). Call it right after `async_check_before_install`."""
-        decided = self.data.install(port, clean_build, self.config_entry.title)
+                f"it before installing: {err}"
+            ) from err
+        self.async_set_updated_data(snapshot)
+        decided = snapshot.install(options.upload_address, options.clean_build, title)
         if isinstance(decided, Refusal):
             raise HomeAssistantError(decided.message)
         return decided
@@ -158,6 +160,17 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
             raise UpdateFailed(f"cannot read {configuration}: {err}") from err
         except DiscoveryError as err:
             raise UpdateFailed(f"cannot read the Git Sources of {configuration}: {err}") from err
+
+    async def _async_poll_now(self) -> Snapshot:
+        """Poll the Followed Sources now, reporting the pre-install check and
+        comparing changes; raise UpdateFailed when the YAML cannot be read."""
+        discovery, files = await self._discover()
+        self._log_untrackable(discovery.untrackable)
+        # A poll that fails from here on changes nothing it saw.
+        async with self._followed.async_poll(discovery, files) as snapshot:
+            self._pre_install_issues.report(snapshot.check)
+            await self.comparisons.async_update(self._followed.changes())
+        return snapshot
 
     def _log_untrackable(self, untrackable: tuple[str, ...]) -> None:
         if untrackable != self._untrackable:

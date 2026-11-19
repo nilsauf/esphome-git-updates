@@ -160,10 +160,16 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         output stays in the Device Builder, nothing is written to /config.
         """
         options = Options.of(self._entry.options)
-        await self._check_before_install()
-        # What gets recorded is what the check just read, not what the remote
-        # holds once the build is done: a push during the build stays an update.
-        plan = self._git.install_plan(options.upload_address, options.clean_build)
+        device_offline = self._linked is not None and self._linked.is_offline(self.entity_id)
+        # In progress from here, so a second press while this one is being
+        # prepared is refused rather than starting a second Install.
+        # The bar is 0 until the first progress arrives.
+        self._set_state(True, 0)
+        try:
+            plan = await self._git.async_prepare_install(options, device_offline)
+        except BaseException:
+            self._set_state(False, None)
+            raise
         task = self._start(lambda: self._runner.run(plan, self._set_percentage), reattached=False)
         # Not awaited directly: cancelling the action must not cancel the Install.
         await asyncio.wait([task])
@@ -173,27 +179,6 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
                 "it is picked up again when the integration is set up"
             )
         task.result()
-
-    async def _check_before_install(self) -> None:
-        """Read the YAML again and refuse an Install it cannot take over the air.
-
-        The Install counts as in progress from here, so a second press while
-        this check runs is refused rather than starting a second Install.
-        A Linked Device that looks offline is refused first: the Device Builder
-        would only defer the Install.
-        """
-        if self._linked is not None and self._linked.is_offline(self.entity_id):
-            raise HomeAssistantError(
-                f"Install of {self._entry.title} refused: device offline "
-                "(every entity of its Linked Device is unavailable)"
-            )
-        # The bar is 0 until the first progress arrives.
-        self._set_state(True, 0)
-        try:
-            await self._git.async_check_before_install()
-        except BaseException:
-            self._set_state(False, None)
-            raise
 
     def _set_state(self, in_progress: bool, percentage: int | None) -> None:
         """Write both Install attributes in one state change."""
@@ -223,9 +208,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
             f"{DOMAIN} install {self._entry.title}",
         )
 
-    async def _install(
-        self, run: Callable[[], Awaitable[InstallEnding]], reattached: bool
-    ) -> None:
+    async def _install(self, run: Callable[[], Awaitable[InstallEnding]], reattached: bool) -> None:
         try:
             ending = await run()
         except asyncio.CancelledError:

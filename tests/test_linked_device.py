@@ -152,11 +152,14 @@ async def test_a_linked_device_whose_entities_are_all_unavailable_refuses_the_in
     polls = builder.transcript
     # Any job the refused Install started would be a mismatch.
     builder.transcript = []
+    reads = len(builder.reads)
 
     with pytest.raises(HomeAssistantError, match="device offline"):
         await press_install(hass)
 
     assert builder.mismatches == []
+    # Refused before reading the YAML: no `devices/get_config` reached the Device Builder.
+    assert builder.reads[reads:] == []
     builder.transcript = polls
     state = hass.states.get(ENTITY_ID)
     assert state is not None
