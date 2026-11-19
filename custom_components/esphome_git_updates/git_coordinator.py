@@ -109,10 +109,10 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
                 f"it before installing: {err}"
             ) from err
         self.async_set_updated_data(snapshot)
-        decided = snapshot.install(options.upload_address, options.clean_build, title)
-        if isinstance(decided, Refusal):
-            raise HomeAssistantError(decided.message)
-        return decided
+        plan_or_refusal = snapshot.install(options.upload_address, options.clean_build, title)
+        if isinstance(plan_or_refusal, Refusal):
+            raise HomeAssistantError(plan_or_refusal.message)
+        return plan_or_refusal
 
     async def async_set_poll_interval(self, interval: timedelta) -> None:
         """Poll every *interval* from now on, starting with a poll right away.

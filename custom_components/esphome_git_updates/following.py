@@ -8,6 +8,11 @@ else Version Tags, else its Latest Commit; a Floating Ref, or a Tag Ref that
 turns out to be a branch, follows its Latest Commit. It seeds the installed
 record with what new Sources start from, and forgets removed ones (ADR-0003).
 
+Each poll's `Snapshot` also decides an Install of it: it plans which commits
+and tags to install and which YAML to rewrite, or refuses when its pre-install
+checks fail (no OTA platform, or a Source following its Latest Commit without
+Refresh Policy `always`).
+
 No Home Assistant imports: the remote, GitHub and the installed record are
 ports handed in.
 """
@@ -378,6 +383,16 @@ class _Outages:
         self._failing &= set(keys)
 
 
+def _nothing_polled(record: InstalledVersions) -> Snapshot:
+    """The Snapshot before any poll: nothing followed, no file read, nothing checked."""
+    return Snapshot(
+        MappingProxyType({}),
+        MappingProxyType({}),
+        PreInstallCheck(OtaStatus.UNKNOWN, ()),
+        record,
+    )
+
+
 class FollowedSources:
     """The Followed Sources of one Tracked Config, polled from their remotes and GitHub.
 
@@ -399,12 +414,7 @@ class FollowedSources:
         self._remote = remote
         self._releases = releases
         self._record = record
-        self._last = Snapshot(
-            MappingProxyType({}),
-            MappingProxyType({}),
-            PreInstallCheck(OtaStatus.UNKNOWN, ()),
-            record,
-        )
+        self._last = _nothing_polled(record)
         # Each repository's Releases at GitHub's last answer, by url.
         self._answers: dict[str, tuple[Release, ...]] = {}
         # The keys of Sources whose remote fails, and the urls GitHub fails for.
