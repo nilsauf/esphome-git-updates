@@ -1,6 +1,6 @@
 # 01: One HA-free GitHub adapter
 
-Status: ready-for-agent
+Status: resolved
 
 **What to build:** as specified in `../spec.md` under "The GitHub adapter".
 
