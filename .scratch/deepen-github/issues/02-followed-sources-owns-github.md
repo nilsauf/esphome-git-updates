@@ -1,6 +1,6 @@
 # 02: FollowedSources owns every rule about GitHub's answers
 
-Status: ready-for-agent
+Status: resolved
 
 **What to build:** as specified in `../spec.md` under "One GitHub port", "`SourceChange`", "`FollowedSources` owns comparisons" and "The git poller".
 
