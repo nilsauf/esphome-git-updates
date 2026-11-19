@@ -23,6 +23,8 @@ jobs:
           mypy types-PyYAML ruff==0.17.4
       - name: Lint
         run: ruff check .
+      - name: Format check
+        run: ruff format --check .
       - name: Typecheck
         run: mypy
       - name: Test
