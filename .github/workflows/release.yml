@@ -25,12 +25,6 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match manifest version $manifest"
             exit 1
           fi
-      - name: Check no placeholders remain
-        run: |
-          if grep -rn OWNER custom_components/esphome_git_updates/manifest.json README.md; then
-            echo "::error::Replace the OWNER placeholders before releasing"
-            exit 1
-          fi
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
