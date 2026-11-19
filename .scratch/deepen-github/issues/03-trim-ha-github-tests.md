@@ -1,6 +1,6 @@
 # 03: Keep the HA GitHub tests to the wiring
 
-Status: ready-for-agent
+Status: resolved
 
 **What to build:** as specified in `../spec.md` under "Testing Decisions" → "Full HA setup". The tests from 01 and 02 now cover paging, the token, comparison caching and failure. Trim `tests/test_github_releases.py` and `tests/test_release_notes.py` (and any other HA test that only repeats them) to the wiring.
 
