@@ -517,7 +517,8 @@ class FollowedSources:
                 "release notes show only commit changes while GitHub cannot be asked: %s",
                 failure,
             )
-        elif wanted:
+        elif any(result is not None for result in results):
+            # None is the adapter's answer for a url not on GitHub: GitHub was not asked.
             self._compare_outages.recovered(_COMPARE, "GitHub answers again")
         self._comparisons.compared = kept
         return any(change.key in kept for change in wanted)

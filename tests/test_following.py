@@ -79,9 +79,14 @@ class InMemoryRemotes:
 
 class InMemoryGitHub:
     """GitHub's Releases and comparisons by url; a url not listed has no Releases, and
-    no comparison (as one not on GitHub). It records each comparison asked for."""
+    no comparison. It records each comparison asked for.
+
+    A url not on GitHub has no Releases and no comparison without GitHub being
+    asked, so even while GitHub cannot be, as the adapter answers for it."""
 
     def __init__(self) -> None:
+        # The urls not on GitHub.
+        self.not_on_github: set[str] = set()
         self.listed: dict[str, tuple[Release, ...]] = {}
         self.comparisons: dict[tuple[str, str, str], Comparison] = {}
         self.compared: list[tuple[str, str, str]] = []
@@ -104,11 +109,15 @@ class InMemoryGitHub:
         return comparison
 
     async def releases(self, url: str) -> tuple[Release, ...]:
+        if url in self.not_on_github:
+            return ()
         if url in self.failing:
             raise GitHubError("GitHub cannot be reached")
         return self.listed.get(url, ())
 
     async def compare(self, url: str, base: str, head: str) -> Comparison | None:
+        if url in self.not_on_github:
+            return None
         self.compared.append((url, base, head))
         if self.compare_raises is not None:
             raised, self.compare_raises = self.compare_raises, None
@@ -641,8 +650,8 @@ async def test_a_failed_comparison_is_asked_for_again_when_compare_missing_is_as
 async def test_compare_missing_without_a_change_to_compare_has_nothing_arrive() -> None:
     tracked = InMemoryTrackedConfig()
     tracked.remote.branch(URL, "dev", "c1")
+    tracked.github.not_on_github.add(URL)
     await tracked.poll(on_ref("dev"))
-    # GitHub lists nothing for it, as for a Source not on GitHub.
     tracked.remote.branch(URL, "dev", "c2")
     await tracked.poll()
 
@@ -708,6 +717,9 @@ async def test_a_failing_compare_is_warned_about_once_and_its_return_logged(
     tracked.remote.branch(URL, "dev", "c2")
     tracked.remote.branch(OTHER, "dev", "s2")
 
+    tracked.github.comparison(URL, "c1", "c2")
+    tracked.github.comparison(OTHER, "s1", "s2")
+
     await tracked.poll()
     await tracked.poll()
     await tracked.followed.async_compare_missing()
@@ -723,6 +735,34 @@ async def test_a_failing_compare_is_warned_about_once_and_its_return_logged(
             ),
         ),
         ("INFO", "node: GitHub answers again"),
+    ]
+
+
+async def test_github_is_not_said_to_answer_again_for_a_change_not_on_github(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.github.not_on_github.add(OTHER)
+    tracked.remote.branch(URL, "dev", "c1")
+    tracked.remote.branch(OTHER, "dev", "s1")
+    await tracked.poll(config(source("dev"), source("dev", url=OTHER)))
+    tracked.github.compare_failing = True
+    tracked.remote.branch(URL, "dev", "c2")
+    tracked.remote.branch(OTHER, "dev", "s2")
+    await tracked.poll()
+
+    # The change on GitHub is installed; the one not on GitHub remains.
+    tracked.record.commits[f"{URL}@dev"] = "c2"
+    await tracked.poll()
+
+    assert _logged(caplog) == [
+        (
+            "WARNING",
+            (
+                "node: release notes show only commit changes while GitHub cannot be "
+                "asked: GitHub cannot be reached"
+            ),
+        ),
     ]
 
 
