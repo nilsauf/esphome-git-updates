@@ -1,19 +1,19 @@
-"""Checks that a Tracked Config can take its latest Git Source commits over the air.
+"""The Repair issues of the checks that a Tracked Config can take its latest Git
+Source commits over the air.
 
-Each failed check refuses the Install and raises its own Repair issue, which
-clears once the YAML is fixed and read again (ADR-0004).
+Each failed check of a poll's `PreInstallCheck` refuses the Install and raises
+its own Repair issue, which clears once the YAML is fixed and read again
+(ADR-0004).
 """
 
 from __future__ import annotations
-
-from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
 from .const import DOMAIN
-from .git_sources import OTA_PLATFORMS, GitSource, OtaStatus
+from .following import PreInstallCheck
 
 _MISSING_OTA = "missing_ota"
 _REFRESH_POLICY = "refresh_policy"
@@ -27,42 +27,6 @@ def missing_ota_issue_id(entry_id: str) -> str:
 def refresh_policy_issue_id(entry_id: str) -> str:
     """The Repair issue raised when a tracked Git Source's Refresh Policy is not `always`."""
     return f"{_REFRESH_POLICY}_{entry_id}"
-
-
-@dataclass(frozen=True)
-class PreInstallCheck:
-    """What the YAML, as last read, says about installing over the air."""
-
-    ota: OtaStatus
-    # The tracked Git Sources whose Refresh Policy is not `always` or `0s`.
-    wrong_refresh_policy: tuple[GitSource, ...]
-
-    @property
-    def ota_missing(self) -> bool:
-        """Whether OTA is known to be missing; a remote package may add it, so unknown is not."""
-        return self.ota is OtaStatus.MISSING
-
-    @property
-    def wrong_refresh_policy_names(self) -> str:
-        return ", ".join(source.name for source in self.wrong_refresh_policy)
-
-    def refusal(self, title: str) -> str | None:
-        """Why an Install of *title* is refused, or None if it may go ahead."""
-        reasons = []
-        if self.ota_missing:
-            platforms = " or ".join(f"`{platform}`" for platform in OTA_PLATFORMS)
-            reasons.append(
-                f"its YAML has no `ota:` platform {platforms}, so it cannot be "
-                "updated over the air; flash it once over USB with OTA enabled"
-            )
-        if self.wrong_refresh_policy:
-            reasons.append(
-                f"the Git Sources {self.wrong_refresh_policy_names} lack `refresh: always`, "
-                "so ESPHome may build a stale cached clone"
-            )
-        if not reasons:
-            return None
-        return f"Install of {title} refused: {'; and '.join(reasons)}. See Repairs."
 
 
 class PreInstallIssues:

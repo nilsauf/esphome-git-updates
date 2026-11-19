@@ -18,13 +18,21 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable, Collection, Iterable, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import Protocol
 
 from .comparisons import SourceChange
 from .git_remote import GitRemoteError, RemoteRef, RemoteRefKind, RemoteTags
-from .git_sources import Discovery, GitSource, RefKind, RefLocation, rewritten
+from .git_sources import (
+    OTA_PLATFORMS,
+    Discovery,
+    GitSource,
+    OtaStatus,
+    RefKind,
+    RefLocation,
+    rewritten,
+)
 from .github import Comparison, GitHubError, Release
 from .install import InstallPlan, YamlRewrite
 from .version_tags import Version, is_version_tag
@@ -271,26 +279,79 @@ def _plan_install(
 
 
 @dataclass(frozen=True)
-class _Poll:
-    """What one poll saw."""
+class Refusal:
+    """Why an Install is refused, as the user is told."""
+
+    message: str
+
+
+@dataclass(frozen=True)
+class PreInstallCheck:
+    """What the YAML, as one poll read it, says about installing over the air."""
+
+    ota: OtaStatus
+    # The Sources following Latest Commit whose Refresh Policy is not `always` or
+    # `0s`, so ESPHome may build a stale cached clone of them (ADR-0004).
+    wrong_refresh_policy: tuple[GitSource, ...]
+
+    @property
+    def ota_missing(self) -> bool:
+        """Whether OTA is known to be missing; a remote package may add it, so unknown is not."""
+        return self.ota is OtaStatus.MISSING
+
+    @property
+    def wrong_refresh_policy_names(self) -> str:
+        return ", ".join(source.name for source in self.wrong_refresh_policy)
+
+    def refusal(self, title: str) -> Refusal | None:
+        """Why an Install of *title* is refused, every failed check named; None if it
+        may go ahead."""
+        reasons = []
+        if self.ota_missing:
+            platforms = " or ".join(f"`{platform}`" for platform in OTA_PLATFORMS)
+            reasons.append(
+                f"its YAML has no `ota:` platform {platforms}, so it cannot be "
+                "updated over the air; flash it once over USB with OTA enabled"
+            )
+        if self.wrong_refresh_policy:
+            reasons.append(
+                f"the Git Sources {self.wrong_refresh_policy_names} lack `refresh: always`, "
+                "so ESPHome may build a stale cached clone"
+            )
+        if not reasons:
+            return None
+        return Refusal(f"Install of {title} refused: {'; and '.join(reasons)}. See Repairs.")
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """What one poll saw, which decides an Install of it on its own.
+
+    Compare two to tell whether anything changed: the installed record is not
+    part of the comparison.
+    """
 
     # Each Followed Source by key: `url@ref` following Latest Commit, `url`
     # following versions (an Install rewrites the ref, ADR-0007).
     followed: Mapping[str, _FollowedSource]
     # The text of each file read, by path, which an Install rewrites.
     files: Mapping[str, str]
-    # The Sources whose Refresh Policy lets ESPHome build a stale cached clone.
-    wrong_refresh_policy: tuple[GitSource, ...]
+    # What the YAML read says about installing over the air.
+    check: PreInstallCheck
+    # The installed record, read when asked.
+    record: InstalledVersions = field(compare=False, repr=False)
 
+    def install(self, port: str, clean_build: bool, title: str) -> InstallPlan | Refusal:
+        """An Install of *title* as this poll showed it, or why it is refused.
 
-_NOTHING_POLLED = _Poll(MappingProxyType({}), MappingProxyType({}), ())
-
-
-@dataclass(frozen=True)
-class Snapshot:
-    """What one poll saw, opaque: compare two to tell whether anything changed."""
-
-    _poll: _Poll
+        The Install records the Latest Commits and versions this poll showed
+        (ADR-0003), after moving each ref to the version shown (ADR-0007) in the
+        files as this poll read them; each against the installed record as it is
+        now, so an Install recorded since rewrites nothing.
+        """
+        if (refusal := self.check.refusal(title)) is not None:
+            return refusal
+        return _plan_install(self.followed.values(), self.record, self.files, port, clean_build)
 
 
 class _Outages:
@@ -338,7 +399,12 @@ class FollowedSources:
         self._remote = remote
         self._releases = releases
         self._record = record
-        self._last = _NOTHING_POLLED
+        self._last = Snapshot(
+            MappingProxyType({}),
+            MappingProxyType({}),
+            PreInstallCheck(OtaStatus.UNKNOWN, ()),
+            record,
+        )
         # Each repository's Releases at GitHub's last answer, by url.
         self._answers: dict[str, tuple[Release, ...]] = {}
         # The keys of Sources whose remote fails, and the urls GitHub fails for.
@@ -360,7 +426,7 @@ class FollowedSources:
         previous = self._last
         self._last = await self._poll(discovery, files)
         try:
-            yield Snapshot(self._last)
+            yield self._last
         except BaseException:
             self._last = previous
             raise
@@ -379,27 +445,7 @@ class FollowedSources:
             if (change := followed.change(self._record))
         ]
 
-    def install_plan(self, port: str, clean_build: bool) -> InstallPlan:
-        """An Install of what the last poll showed: it records the Latest Commits and
-        versions shown (ADR-0003), after moving each ref to the version shown
-        (ADR-0007) in the files as that poll read them."""
-        return _plan_install(
-            self._last.followed.values(), self._record, self._last.files, port, clean_build
-        )
-
-    def wrong_refresh_policy(self) -> tuple[GitSource, ...]:
-        """The Sources of the last poll whose Refresh Policy lets ESPHome build a stale
-        clone of them.
-
-        Only a Source following Latest Commit can be: a Pinned Ref never moves,
-        and a changed tag is a new `url@ref` in ESPHome's clone cache (ADR-0004).
-        """
-        following_commits = _latest_commits(self._last.followed.values())
-        return tuple(
-            source for source in self._last.wrong_refresh_policy if source.key in following_commits
-        )
-
-    async def _poll(self, discovery: Discovery, files: Mapping[str, str]) -> _Poll:
+    async def _poll(self, discovery: Discovery, files: Mapping[str, str]) -> Snapshot:
         previous = self._last.followed
         results = await asyncio.gather(
             *(self._ask_remote(source) for source in discovery.sources),
@@ -421,10 +467,20 @@ class FollowedSources:
         self._remote_outages.keep_only(source.key for source in discovery.sources)
         followed = await self._with_releases(followed)
         await self._seed(discovery, followed)
-        return _Poll(
-            MappingProxyType(followed),
-            MappingProxyType(dict(files)),
-            discovery.wrong_refresh_policy,
+        # Only a Source following Latest Commit can be built stale: a Pinned Ref
+        # never moves, and a changed tag is a new `url@ref` in ESPHome's clone
+        # cache (ADR-0004).
+        following_commits = _latest_commits(followed.values())
+        check = PreInstallCheck(
+            discovery.ota,
+            tuple(
+                source
+                for source in discovery.wrong_refresh_policy
+                if source.key in following_commits
+            ),
+        )
+        return Snapshot(
+            MappingProxyType(followed), MappingProxyType(dict(files)), check, self._record
         )
 
     async def _ask_remote(self, source: GitSource) -> _FollowedSource:

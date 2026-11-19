@@ -8,7 +8,7 @@ from collections.abc import Collection, Mapping
 import pytest
 
 from custom_components.esphome_git_updates.comparisons import SourceChange
-from custom_components.esphome_git_updates.following import FollowedSources, Snapshot
+from custom_components.esphome_git_updates.following import FollowedSources, Refusal, Snapshot
 from custom_components.esphome_git_updates.git_remote import (
     GitRemoteError,
     RemoteRef,
@@ -166,6 +166,13 @@ def on_ref(ref: str | None) -> str:
 
 def versions(installed: str, offered: str, *releases: Release) -> ShownSource:
     return ShownSource("marsrelay", installed, offered, versions=True, releases=releases)
+
+
+def plan(snapshot: Snapshot) -> InstallPlan:
+    """The Install *snapshot* plans over the air, without a clean build."""
+    decided = snapshot.install("OTA", False, "node")
+    assert isinstance(decided, InstallPlan), decided
+    return decided
 
 
 def _logged(caplog: pytest.LogCaptureFixture) -> list[tuple[str, str]]:
@@ -620,32 +627,31 @@ async def test_shown_and_changes_reflect_an_install_recorded_after_the_poll() ->
     assert tracked.followed.changes() == []
 
 
-async def test_an_install_plan_after_an_install_with_no_poll_rewrites_nothing() -> None:
+async def test_an_install_after_an_install_with_no_poll_rewrites_nothing() -> None:
     tracked = InMemoryTrackedConfig()
     tracked.remote.branch(URL, "main", "c9")
     tracked.remote.tag(URL, "v1.0.0", "c1")
     await tracked.poll(on_ref(None))
     tracked.remote.tag(URL, "v1.1.0", "c2")
-    await tracked.poll()
-    assert tracked.followed.install_plan("OTA", False).rewrites != ()
+    snapshot = await tracked.poll()
+    assert plan(snapshot).rewrites != ()
 
     tracked.record.tags[URL] = "v1.1.0"
 
-    plan = tracked.followed.install_plan("OTA", False)
-    assert plan.rewrites == ()
-    assert plan.tags == {URL: "v1.1.0"}
+    assert plan(snapshot).rewrites == ()
+    assert plan(snapshot).tags == {URL: "v1.1.0"}
 
 
-async def test_an_install_plan_rewrites_the_files_as_its_poll_read_them() -> None:
+async def test_an_install_rewrites_the_files_as_its_poll_read_them() -> None:
     tracked = InMemoryTrackedConfig()
     tracked.remote.tag(URL, "v1.0.0", "c1")
     tracked.remote.tag(URL, "v1.1.0", "c2")
     await tracked.poll(on_ref("v1.0.0"))
     read = "# edited\n" + on_ref("v1.0.0")
 
-    await tracked.poll(read)
+    snapshot = await tracked.poll(read)
 
-    assert tracked.followed.install_plan("192.168.1.2", True) == InstallPlan(
+    assert snapshot.install("192.168.1.2", True, "node") == InstallPlan(
         {},
         "192.168.1.2",
         True,
@@ -654,7 +660,20 @@ async def test_an_install_plan_rewrites_the_files_as_its_poll_read_them() -> Non
     )
 
 
-async def test_an_install_plan_moves_a_tag_ref_to_the_newest_release_not_a_newer_tag() -> None:
+async def test_an_install_is_of_its_own_poll_not_a_later_one() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    await tracked.poll(on_ref("dev"))
+    tracked.remote.branch(URL, "dev", "c2")
+    snapshot = await tracked.poll()
+
+    tracked.remote.branch(URL, "dev", "c3")
+    await tracked.poll()
+
+    assert plan(snapshot) == InstallPlan({f"{URL}@dev": "c2"}, "OTA", False)
+
+
+async def test_an_install_moves_a_tag_ref_to_the_newest_release_not_a_newer_tag() -> None:
     tracked = InMemoryTrackedConfig()
     tracked.remote.tag(URL, "v1.4.0", "c1")
     tracked.remote.tag(URL, "v1.5.0", "c2")
@@ -662,9 +681,10 @@ async def test_an_install_plan_moves_a_tag_ref_to_the_newest_release_not_a_newer
     tracked.remote.tag(URL, "v1.7.0", "c3")
     tracked.releases.release(URL, "v1.4.0")
     tracked.releases.release(URL, "v1.5.0")
-    await tracked.poll(on_ref("v1.4.0"))
 
-    assert tracked.followed.install_plan("OTA", False) == InstallPlan(
+    snapshot = await tracked.poll(on_ref("v1.4.0"))
+
+    assert plan(snapshot) == InstallPlan(
         {},
         "OTA",
         False,
@@ -673,43 +693,104 @@ async def test_an_install_plan_moves_a_tag_ref_to_the_newest_release_not_a_newer
     )
 
 
-async def test_an_install_plan_leaves_an_unset_ref_unwritten_without_a_newer_version() -> None:
+async def test_an_install_leaves_an_unset_ref_unwritten_without_a_newer_version() -> None:
     tracked = InMemoryTrackedConfig()
     tracked.remote.branch(URL, "main", "c9")
     tracked.remote.tag(URL, "v1.4.0", "c1")
-    await tracked.poll(on_ref(None))
 
-    assert tracked.followed.install_plan("OTA", False) == InstallPlan(
-        {}, "OTA", False, tags={URL: "v1.4.0"}
-    )
+    snapshot = await tracked.poll(on_ref(None))
+
+    assert plan(snapshot) == InstallPlan({}, "OTA", False, tags={URL: "v1.4.0"})
 
 
-async def test_an_install_plan_records_a_latest_commit_without_touching_its_ref() -> None:
+async def test_an_install_records_a_latest_commit_without_touching_its_ref() -> None:
     tracked = InMemoryTrackedConfig()
     tracked.remote.branch(URL, "main", "c1")
     tracked.remote.tag(URL, "v1.0.0", "c0")
-    await tracked.poll(config(f"  - source: {{type: git, url: {URL}}}\n"))
+    await tracked.poll(config(f"  - source: {{type: git, url: {URL}}}\n    refresh: always\n"))
     tracked.remote.branch(URL, "main", "c2")
-    await tracked.poll()
 
-    assert tracked.followed.install_plan("OTA", False) == InstallPlan(
-        {f"{URL}@HEAD": "c2"}, "OTA", False
+    snapshot = await tracked.poll()
+
+    assert plan(snapshot) == InstallPlan({f"{URL}@HEAD": "c2"}, "OTA", False)
+
+
+# Refusing an Install it cannot take over the air.
+
+
+def without_ota(yaml: str) -> str:
+    return yaml.replace("ota:\n  - platform: esphome\n", "")
+
+
+NO_OTA = (
+    "its YAML has no `ota:` platform `esphome` or `web_server`, so it cannot be "
+    "updated over the air; flash it once over USB with OTA enabled"
+)
+
+
+def refused(*reasons: str) -> Refusal:
+    return Refusal(f"Install of node refused: {'; and '.join(reasons)}. See Repairs.")
+
+
+def stale(names: str) -> str:
+    return (
+        f"the Git Sources {names} lack `refresh: always`, so ESPHome may build a stale cached clone"
     )
 
 
-# Refresh Policy (ADR-0004).
+async def test_an_install_without_ota_is_refused_naming_the_ota_platforms() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+
+    snapshot = await tracked.poll(without_ota(on_ref("dev")))
+
+    assert snapshot.install("OTA", False, "node") == refused(NO_OTA)
+    assert snapshot.check.ota_missing
 
 
-async def test_only_sources_following_latest_commit_need_refresh_always() -> None:
+async def test_an_install_whose_ota_a_remote_package_may_add_is_not_refused() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    tracked.remote.branch(OTHER, "main", "p1")
+    package = (
+        f"packages:\n  base:\n    url: {OTHER}\n    ref: main\n"
+        "    refresh: always\n    files: [base.yaml]\n"
+    )
+
+    snapshot = await tracked.poll(package + without_ota(on_ref("dev")))
+
+    assert isinstance(snapshot.install("OTA", False, "node"), InstallPlan)
+
+
+async def test_an_install_of_a_floating_ref_without_refresh_always_is_refused_naming_it() -> None:
     tracked = InMemoryTrackedConfig()
     tracked.remote.branch(URL, "dev", "c1")
     tracked.remote.tag(OTHER, "v1.0.0", "c2")
 
-    await tracked.poll(
+    snapshot = await tracked.poll(
         config(source("dev", refresh="1d"), source("v1.0.0", url=OTHER, refresh="1d"))
     )
 
-    assert tracked.followed.wrong_refresh_policy() == (GitSource("marsrelay", URL, "dev"),)
+    assert snapshot.install("OTA", False, "node") == refused(stale("marsrelay"))
+    assert snapshot.check.wrong_refresh_policy == (GitSource("marsrelay", URL, "dev"),)
+
+
+async def test_an_install_of_a_tag_that_is_no_version_tag_needs_refresh_always() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "stable", "c1")
+
+    snapshot = await tracked.poll(on_ref("stable").replace("    refresh: always\n", ""))
+
+    assert snapshot.install("OTA", False, "node") == refused(stale("marsrelay"))
+
+
+async def test_an_install_of_a_tag_ref_needs_no_refresh_policy() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.tag(URL, "v1.0.0", "c1")
+
+    snapshot = await tracked.poll(on_ref("v1.0.0").replace("    refresh: always\n", ""))
+
+    assert isinstance(snapshot.install("OTA", False, "node"), InstallPlan)
 
 
 async def test_an_unset_ref_needs_refresh_always_only_while_it_follows_its_latest_commit() -> None:
@@ -718,10 +799,23 @@ async def test_an_unset_ref_needs_refresh_always_only_while_it_follows_its_lates
     # A tag that is no Version Tag does not make it follow versions.
     tracked.remote.tag(URL, "stable", "c1")
     unset = on_ref(None).replace("    refresh: always\n", "")
-    await tracked.poll(unset)
-    assert tracked.followed.wrong_refresh_policy() == (GitSource("marsrelay", URL, None),)
+    snapshot = await tracked.poll(unset)
+    assert snapshot.install("OTA", False, "node") == refused(stale("marsrelay"))
 
     tracked.remote.tag(URL, "v1.4.0", "c2")
-    await tracked.poll()
+    snapshot = await tracked.poll()
 
-    assert tracked.followed.wrong_refresh_policy() == ()
+    assert isinstance(snapshot.install("OTA", False, "node"), InstallPlan)
+    assert snapshot.check.wrong_refresh_policy == ()
+
+
+async def test_an_install_failing_several_checks_is_refused_naming_every_reason() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    tracked.remote.branch(OTHER, "dev", "s1")
+
+    snapshot = await tracked.poll(
+        without_ota(config(source("dev", refresh="1d"), source("dev", url=OTHER, refresh="1d")))
+    )
+
+    assert snapshot.install("OTA", False, "node") == refused(NO_OTA, stale("marsrelay, sensors"))

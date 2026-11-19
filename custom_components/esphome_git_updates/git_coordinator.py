@@ -14,12 +14,12 @@ from .connection import DeviceBuilderSession, DeviceBuilderUnavailable, Protocol
 from .const import CONF_CONFIGURATION, DOMAIN
 from .coordinator import EsphomeGitUpdatesConfigEntry, TrackedConfigStore
 from .device_builder import CommandFailed, DeviceBuilderClient
-from .following import FollowedSources, Snapshot
+from .following import FollowedSources, Refusal, Snapshot
 from .git_remote import LsRemote
 from .git_sources import Discovery, DiscoveryError, Reader, discover_git_sources
 from .install import InstallPlan
 from .options import Options
-from .pre_install import PreInstallCheck, PreInstallIssues
+from .pre_install import PreInstallIssues
 from .releases import GitHubReleases
 from .versions import ShownSource
 
@@ -70,8 +70,6 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
         self._session = session
         self._untrackable: tuple[str, ...] = ()
         self._pre_install_issues = PreInstallIssues(hass, entry)
-        # What the YAML said at the last successful poll.
-        self._pre_install_check: PreInstallCheck | None = None
         self.comparisons = GitHubComparisons(hass, entry)
         self._followed = FollowedSources(
             # Renaming the entry does not reload it: log under its title of the moment.
@@ -86,16 +84,9 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
         self._log_untrackable(discovery.untrackable)
         # A poll that fails from here on changes nothing it saw.
         async with self._followed.async_poll(discovery, files) as snapshot:
-            self._check(discovery)
+            self._pre_install_issues.report(snapshot.check)
             await self.comparisons.async_update(self._followed.changes())
         return snapshot
-
-    def _check(self, discovery: Discovery) -> None:
-        """Check the YAML just read for an Install, and raise or clear its Repair issues."""
-        self._pre_install_check = PreInstallCheck(
-            ota=discovery.ota, wrong_refresh_policy=self._followed.wrong_refresh_policy()
-        )
-        self._pre_install_issues.report(self._pre_install_check)
 
     async def async_check_before_install(self) -> None:
         """Read the YAML again and raise HomeAssistantError if an Install must be refused.
@@ -104,20 +95,22 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
         """
         title = self.config_entry.title
         await self.async_refresh()
-        check = self._pre_install_check
-        if not self.last_update_success or check is None:
+        if not self.last_update_success:
             raise HomeAssistantError(
                 f"Install of {title} refused: cannot read its YAML to check "
                 f"it before installing: {self.last_exception}"
             )
-        if (refusal := check.refusal(title)) is not None:
-            raise HomeAssistantError(refusal)
+        if (refusal := self.data.check.refusal(title)) is not None:
+            raise HomeAssistantError(refusal.message)
 
     def install_plan(self, port: str, clean_build: bool) -> InstallPlan:
         """An Install of what the last poll showed: it records the Latest Commits and
         versions shown (ADR-0003), after moving each Tag Ref to the version shown
         (ADR-0007). Call it right after `async_check_before_install`."""
-        return self._followed.install_plan(port, clean_build)
+        decided = self.data.install(port, clean_build, self.config_entry.title)
+        if isinstance(decided, Refusal):
+            raise HomeAssistantError(decided.message)
+        return decided
 
     async def async_set_poll_interval(self, interval: timedelta) -> None:
         """Poll every *interval* from now on, starting with a poll right away.
