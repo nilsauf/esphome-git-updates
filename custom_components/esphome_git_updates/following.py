@@ -17,15 +17,15 @@ It also keeps GitHub's comparison of each changed Source, for release notes:
 compared once while the change's two commits stay the same, asked again after a
 failure, forgotten once the change is gone.
 
-No Home Assistant imports: the remote, GitHub and the installed record are
-ports handed in.
+No Home Assistant imports: the remote and GitHub are ports handed in, and the
+Installed Record handed in keeps its storage behind a port of its own.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Callable, Collection, Iterable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
@@ -43,6 +43,7 @@ from .git_sources import (
 )
 from .github import Comparison, GitHubError, Release
 from .install import InstallPlan, YamlRewrite
+from .installed_record import InstalledRecord, Seeds
 from .version_tags import Version, is_version_tag
 from .versions import ShownSource
 
@@ -83,20 +84,6 @@ class InstalledVersions(Protocol):
     def installed_commit(self, source_key: str) -> str | None: ...
 
     def installed_tag(self, url: str) -> str | None: ...
-
-
-class InstalledRecord(InstalledVersions, Protocol):
-    """The installed record, which new Sources are seeded into (ADR-0003)."""
-
-    async def async_seed_commits(self, seeds: Mapping[str, str], present: Collection[str]) -> None:
-        """Record *seeds* (by key) where no Installed Commit is recorded yet, and forget
-        every key not in *present*."""
-        ...
-
-    async def async_seed_tags(self, seeds: Mapping[str, str], present: Collection[str]) -> None:
-        """Record *seeds* (by url) where no Installed Tag is recorded yet, and forget
-        every url not in *present*."""
-        ...
 
 
 class SourceChange(NamedTuple):
@@ -658,14 +645,14 @@ class FollowedSources:
         the tag the YAML names, kept while its remote cannot be asked; an Unset
         Ref following versions from the version it follows.
         """
-        await self._record.async_seed_commits(
-            _latest_commits(followed.values()), {source.key for source in discovery.sources}
-        )
         versioned = _following_versions(followed.values())
-        await self._record.async_seed_tags(
-            {each.key: seed for each in versioned if (seed := each.seed())},
-            {each.key for each in versioned}
-            | {source.url for source in discovery.sources if source.kind is RefKind.TAG},
+        await self._record.async_seed(
+            Seeds(_latest_commits(followed.values()), {source.key for source in discovery.sources}),
+            Seeds(
+                {each.key: seed for each in versioned if (seed := each.seed())},
+                {each.key for each in versioned}
+                | {source.url for source in discovery.sources if source.kind is RefKind.TAG},
+            ),
         )
 
 

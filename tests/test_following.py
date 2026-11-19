@@ -3,8 +3,6 @@ installed record: no Home Assistant, no Device Builder, no git."""
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
-
 import pytest
 
 from custom_components.esphome_git_updates.following import (
@@ -27,7 +25,9 @@ from custom_components.esphome_git_updates.github import (
     Release,
 )
 from custom_components.esphome_git_updates.install import InstallPlan, YamlRewrite
+from custom_components.esphome_git_updates.installed_record import InstalledRecord
 from custom_components.esphome_git_updates.versions import ShownSource
+from in_memory_storage import InMemoryStorage
 
 URL = "https://github.com/someone/marsrelay.git"
 OTHER = "https://github.com/someone/sensors.git"
@@ -127,30 +127,6 @@ class InMemoryGitHub:
         return self.comparisons.get((url, base, head))
 
 
-class InMemoryRecord:
-    """The installed record, in memory."""
-
-    def __init__(self) -> None:
-        self.commits: dict[str, str] = {}
-        self.tags: dict[str, str] = {}
-
-    def installed_commit(self, source_key: str) -> str | None:
-        return self.commits.get(source_key)
-
-    def installed_tag(self, url: str) -> str | None:
-        return self.tags.get(url)
-
-    async def async_seed_commits(self, seeds: Mapping[str, str], present: Collection[str]) -> None:
-        self.commits = {key: sha for key, sha in self.commits.items() if key in present}
-        for key, sha in seeds.items():
-            self.commits.setdefault(key, sha)
-
-    async def async_seed_tags(self, seeds: Mapping[str, str], present: Collection[str]) -> None:
-        self.tags = {url: tag for url, tag in self.tags.items() if url in present}
-        for url, tag in seeds.items():
-            self.tags.setdefault(url, tag)
-
-
 class InMemoryTrackedConfig:
     """A Tracked Config whose YAML is held in memory, its Followed Sources polled over
     in-memory remotes, GitHub and installed record."""
@@ -158,7 +134,7 @@ class InMemoryTrackedConfig:
     def __init__(self) -> None:
         self.remote = InMemoryRemotes()
         self.github = InMemoryGitHub()
-        self.record = InMemoryRecord()
+        self.record = InstalledRecord(InMemoryStorage())
         self.followed = FollowedSources(self.remote, self.github, self.record, lambda: "node")
         self.yaml = ""
 
@@ -180,6 +156,12 @@ class InMemoryTrackedConfig:
 
     def shown(self) -> tuple[ShownSource, ...]:
         return self.followed.shown()
+
+    async def installed(
+        self, commits: dict[str, str] | None = None, tags: dict[str, str] | None = None
+    ) -> None:
+        """Record a successful Install of *commits* and *tags*."""
+        await self.record.async_record_install("2025.6.0", commits or {}, tags or {})
 
 
 def source(ref: str | None, *, url: str = URL, refresh: str = "always") -> str:
@@ -475,7 +457,7 @@ async def test_an_unset_ref_shows_no_version_until_github_answers() -> None:
     tracked.github.failing.add(URL)
     await tracked.poll(on_ref(None))
     assert tracked.shown() == (versions("", ""),)
-    assert tracked.record.tags == {}
+    assert tracked.record.installed_tag(URL) is None
 
     tracked.remote.tag(URL, "v1.5.0", "c2")
     tracked.github.failing.clear()
@@ -483,7 +465,7 @@ async def test_an_unset_ref_shows_no_version_until_github_answers() -> None:
 
     # GitHub answered "no Releases" at last: it follows Version Tags from v1.5.0 on.
     assert tracked.shown() == (versions("v1.5.0", "v1.5.0"),)
-    assert tracked.record.tags == {URL: "v1.5.0"}
+    assert tracked.record.installed_tag(URL) == "v1.5.0"
 
 
 async def test_a_failing_remote_is_warned_about_once_and_its_return_logged(
@@ -752,7 +734,7 @@ async def test_github_is_not_said_to_answer_again_for_a_change_not_on_github(
     await tracked.poll()
 
     # The change on GitHub is installed; the one not on GitHub remains.
-    tracked.record.commits[f"{URL}@dev"] = "c2"
+    await tracked.installed(commits={f"{URL}@dev": "c2"})
     await tracked.poll()
 
     assert _logged(caplog) == [
@@ -777,8 +759,8 @@ async def test_new_sources_are_seeded_with_what_they_start_from() -> None:
 
     await tracked.poll(config(source("dev"), source("v1.0.0", url=OTHER)))
 
-    assert tracked.record.commits == {f"{URL}@dev": "c1"}
-    assert tracked.record.tags == {OTHER: "v1.0.0"}
+    assert tracked.record.installed_commit(f"{URL}@dev") == "c1"
+    assert tracked.record.installed_tag(OTHER) == "v1.0.0"
 
 
 async def test_removed_sources_are_forgotten() -> None:
@@ -789,8 +771,8 @@ async def test_removed_sources_are_forgotten() -> None:
 
     await tracked.poll(config())
 
-    assert tracked.record.commits == {}
-    assert tracked.record.tags == {}
+    assert tracked.record.installed_commit(f"{URL}@dev") is None
+    assert tracked.record.installed_tag(OTHER) is None
 
 
 async def test_a_source_added_later_is_seeded_and_offered_its_next_push() -> None:
@@ -800,7 +782,8 @@ async def test_a_source_added_later_is_seeded_and_offered_its_next_push() -> Non
     await tracked.poll(config(source("dev")))
 
     await tracked.poll(config(source("dev"), source("dev", url=OTHER)))
-    assert tracked.record.commits == {f"{URL}@dev": "c1", f"{OTHER}@dev": "s1"}
+    assert tracked.record.installed_commit(f"{URL}@dev") == "c1"
+    assert tracked.record.installed_commit(f"{OTHER}@dev") == "s1"
 
     tracked.remote.branch(OTHER, "dev", "s2")
     await tracked.poll()
@@ -816,12 +799,12 @@ async def test_an_unset_ref_that_followed_commits_before_starts_from_the_newest_
     tracked.github.release(URL, "v1.4.0")
     tracked.github.release(URL, "v1.5.0")
     # Recorded before the upgrade, when every Unset Ref followed its Latest Commit.
-    tracked.record.commits[f"{URL}@HEAD"] = "c0"
+    await tracked.installed(commits={f"{URL}@HEAD": "c0"})
 
     await tracked.poll(on_ref(None))
 
     assert tracked.shown() == (versions("v1.5.0", "v1.5.0"),)
-    assert tracked.record.tags == {URL: "v1.5.0"}
+    assert tracked.record.installed_tag(URL) == "v1.5.0"
 
 
 async def test_a_tag_changed_in_the_yaml_by_hand_leaves_the_installed_tag_unchanged() -> None:
@@ -832,18 +815,18 @@ async def test_a_tag_changed_in_the_yaml_by_hand_leaves_the_installed_tag_unchan
 
     await tracked.poll(on_ref("v1.5.0"))
 
-    assert tracked.record.tags == {URL: "v1.4.0"}
+    assert tracked.record.installed_tag(URL) == "v1.4.0"
     assert tracked.shown() == (versions("v1.4.0", "v1.5.0"),)
 
 
 async def test_a_tag_ref_whose_remote_fails_keeps_its_installed_tag() -> None:
     tracked = InMemoryTrackedConfig()
-    tracked.record.tags[URL] = "v1.1.0"
+    await tracked.installed(tags={URL: "v1.1.0"})
     tracked.remote.failing.add(URL)
 
     await tracked.poll(on_ref("v1.0.0"))
 
-    assert tracked.record.tags == {URL: "v1.1.0"}
+    assert tracked.record.installed_tag(URL) == "v1.1.0"
 
 
 # Queries read the installed record when asked.
@@ -857,7 +840,7 @@ async def test_shown_and_changes_reflect_an_install_recorded_after_the_poll() ->
     await tracked.poll()
     assert tracked.followed.changes() == [SourceChange(f"{URL}@dev", URL, "c1", "c2")]
 
-    tracked.record.commits[f"{URL}@dev"] = "c2"
+    await tracked.installed(commits={f"{URL}@dev": "c2"})
 
     assert tracked.shown() == (ShownSource("marsrelay", "c2", "c2"),)
     assert tracked.followed.changes() == []
@@ -872,7 +855,7 @@ async def test_an_install_after_an_install_with_no_poll_rewrites_nothing() -> No
     snapshot = await tracked.poll()
     assert plan(snapshot).rewrites != ()
 
-    tracked.record.tags[URL] = "v1.1.0"
+    await tracked.installed(tags={URL: "v1.1.0"})
 
     assert plan(snapshot).rewrites == ()
     assert plan(snapshot).tags == {URL: "v1.1.0"}

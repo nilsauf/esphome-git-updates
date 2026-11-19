@@ -21,13 +21,10 @@ from homeassistant.helpers.event import async_track_device_registry_updated_even
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_CONFIGURATION, DOMAIN
-from .coordinator import (
-    EsphomeGitUpdatesConfigEntry,
-    EsphomeVersionCoordinator,
-    TrackedConfigStore,
-)
+from .coordinator import EsphomeGitUpdatesConfigEntry, EsphomeVersionCoordinator
 from .git_coordinator import GitSourcesCoordinator
 from .install import ActiveInstall, Installed, InstallEnding, InstallRunner
+from .installed_record import InstalledRecord
 from .linked_device import LinkedDevice
 from .options import Options
 from .versions import Versions
@@ -66,13 +63,13 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         super().__init__(entry.runtime_data.coordinator)
         self._entry = entry
         self._notification_id = f"{DOMAIN}_{entry.entry_id}_install"
-        self._store: TrackedConfigStore = entry.runtime_data.store
+        self._record: InstalledRecord = entry.runtime_data.record
         self._git: GitSourcesCoordinator = entry.runtime_data.git_coordinator
         self._linked: LinkedDevice | None = entry.runtime_data.linked_device
         self._runner = InstallRunner(
             entry.data[CONF_CONFIGURATION],
             entry.runtime_data.session,
-            self._store,
+            self._record,
         )
         # Whether the unknown Installed ESPHome Version has been warned about.
         self._warned_unknown = False
@@ -97,7 +94,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
                 )
             )
             self._warn_if_installed_unknown()
-        if (active := self._store.active_install) is not None:
+        if (active := self._record.active_install) is not None:
             self._reattach(active)
 
     @callback
@@ -109,7 +106,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
     def _installed_esphome(self) -> str | None:
         """What the Linked Device reports, else what the last Install recorded (ADR-0003)."""
         reported = self._linked.esphome_version if self._linked is not None else None
-        return reported or self._store.installed_esphome_version
+        return reported or self._record.installed_esphome_version
 
     def _warn_if_installed_unknown(self) -> None:
         """Warn once while the Installed ESPHome Version is unknown, so no update shows."""
@@ -199,7 +196,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         """Run an Install as a task of the entry.
 
         Unloading the entry, as stopping Home Assistant does, cancels the task
-        but leaves its jobs in the store, to be re-attached on the next setup.
+        but leaves its jobs in the Installed Record, to be re-attached on the next setup.
         """
         self._set_state(True, 0)
         return self._entry.async_create_background_task(

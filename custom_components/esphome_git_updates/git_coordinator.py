@@ -12,13 +12,14 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .connection import DeviceBuilderSession, DeviceBuilderUnavailable, ProtocolProblem
 from .const import CONF_CONFIGURATION, DOMAIN
-from .coordinator import EsphomeGitUpdatesConfigEntry, TrackedConfigStore
+from .coordinator import EsphomeGitUpdatesConfigEntry
 from .device_builder import CommandFailed, DeviceBuilderClient
 from .following import FollowedSources, Refusal, Snapshot
 from .git_remote import LsRemote
 from .git_sources import Discovery, DiscoveryError, Reader, discover_git_sources
 from .github import GitHub
 from .install import InstallPlan
+from .installed_record import InstalledRecord
 from .options import Options
 from .pre_install import PreInstallIssues
 from .versions import ShownSource
@@ -56,7 +57,7 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
         self,
         hass: HomeAssistant,
         entry: EsphomeGitUpdatesConfigEntry,
-        store: TrackedConfigStore,
+        record: InstalledRecord,
         session: DeviceBuilderSession,
     ) -> None:
         super().__init__(
@@ -78,7 +79,7 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
                 lambda: Options.of(entry.options).github_token,
                 lambda: entry.title,
             ),
-            store,
+            record,
             lambda: entry.title,
         )
 
