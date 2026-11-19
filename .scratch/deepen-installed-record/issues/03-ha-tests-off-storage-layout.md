@@ -1,6 +1,6 @@
 # 03: HA tests stop depending on the storage layout
 
-Status: ready-for-agent
+Status: resolved
 
 **What to build:** as specified in `../spec.md` under "Testing Decisions": one format test and "Full HA setup".
 
@@ -11,10 +11,10 @@ Status: ready-for-agent
 
 **Blocked by:** 02
 
-- [ ] No HA test other than the format test names a storage field.
-- [ ] The kept HA tests cover the wiring:
+- [x] No HA test other than the format test names a storage field.
+- [x] The kept HA tests cover the wiring:
   - a Linked Device's `sw_version` reaches the entity and a change of it updates the entity;
   - seeding at setup without a Linked Device, and none with one, present or gone;
   - a successful Install is recorded; a restart re-attaches;
   - a removed entry's record is deleted.
-- [ ] The full test suite passes, and `ruff` is clean.
+- [x] The full test suite passes, and `ruff` is clean.
