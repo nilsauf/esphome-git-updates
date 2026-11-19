@@ -1,4 +1,4 @@
-"""What each Followed Source follows, polled through in-memory remote, Releases and
+"""What each Followed Source follows, polled through in-memory remote, GitHub and
 installed record: no Home Assistant, no Device Builder, no git."""
 
 from __future__ import annotations
@@ -7,8 +7,12 @@ from collections.abc import Collection, Mapping
 
 import pytest
 
-from custom_components.esphome_git_updates.comparisons import SourceChange
-from custom_components.esphome_git_updates.following import FollowedSources, Refusal, Snapshot
+from custom_components.esphome_git_updates.following import (
+    FollowedSources,
+    Refusal,
+    Snapshot,
+    SourceChange,
+)
 from custom_components.esphome_git_updates.git_remote import (
     GitRemoteError,
     RemoteRef,
@@ -16,7 +20,12 @@ from custom_components.esphome_git_updates.git_remote import (
     RemoteTags,
 )
 from custom_components.esphome_git_updates.git_sources import GitSource, discover_git_sources
-from custom_components.esphome_git_updates.github import Comparison, GitHubError, Release
+from custom_components.esphome_git_updates.github import (
+    Commit,
+    Comparison,
+    GitHubError,
+    Release,
+)
 from custom_components.esphome_git_updates.install import InstallPlan, YamlRewrite
 from custom_components.esphome_git_updates.versions import ShownSource
 
@@ -68,22 +77,40 @@ class InMemoryRemotes:
         return RemoteTags(found, listed)
 
 
-class InMemoryReleases:
-    """GitHub's Releases by url; a url not listed has none (or is not on GitHub)."""
+class InMemoryGitHub:
+    """GitHub's Releases and comparisons by url; a url not listed has no Releases, and
+    no comparison (as one not on GitHub). It records each comparison asked for."""
 
     def __init__(self) -> None:
         self.listed: dict[str, tuple[Release, ...]] = {}
+        self.comparisons: dict[tuple[str, str, str], Comparison] = {}
+        self.compared: list[tuple[str, str, str]] = []
+        # The urls whose Releases GitHub cannot list.
         self.failing: set[str] = set()
+        # Whether GitHub cannot compare.
+        self.compare_failing = False
 
     def release(self, url: str, tag: str) -> Release:
         release = Release(tag, f"Release {tag}", "", f"{url}/releases/{tag}", False, False)
         self.listed[url] = (*self.listed.get(url, ()), release)
         return release
 
+    def comparison(self, url: str, base: str, head: str) -> Comparison:
+        """List the commit *head* as the one after *base* at *url*."""
+        comparison = Comparison(1, (Commit(head, f"Commit {head}", f"{url}/commit/{head}"),))
+        self.comparisons[url, base, head] = comparison
+        return comparison
+
     async def releases(self, url: str) -> tuple[Release, ...]:
         if url in self.failing:
             raise GitHubError("GitHub cannot be reached")
         return self.listed.get(url, ())
+
+    async def compare(self, url: str, base: str, head: str) -> Comparison | None:
+        self.compared.append((url, base, head))
+        if self.compare_failing:
+            raise GitHubError("GitHub cannot be reached")
+        return self.comparisons.get((url, base, head))
 
 
 class InMemoryRecord:
@@ -110,20 +137,15 @@ class InMemoryRecord:
             self.tags.setdefault(url, tag)
 
 
-class NoComparisons:
-    def get(self, key: str, installed: str | None, latest: str) -> Comparison | None:
-        return None
-
-
 class InMemoryTrackedConfig:
     """A Tracked Config whose YAML is held in memory, its Followed Sources polled over
-    in-memory remotes, Releases and installed record."""
+    in-memory remotes, GitHub and installed record."""
 
     def __init__(self) -> None:
         self.remote = InMemoryRemotes()
-        self.releases = InMemoryReleases()
+        self.github = InMemoryGitHub()
         self.record = InMemoryRecord()
-        self.followed = FollowedSources(self.remote, self.releases, self.record, lambda: "node")
+        self.followed = FollowedSources(self.remote, self.github, self.record, lambda: "node")
         self.yaml = ""
 
     async def poll(self, yaml: str | None = None, *, then: Exception | None = None) -> Snapshot:
@@ -143,7 +165,7 @@ class InMemoryTrackedConfig:
             return snapshot
 
     def shown(self) -> tuple[ShownSource, ...]:
-        return self.followed.shown(NoComparisons())
+        return self.followed.shown()
 
 
 def source(ref: str | None, *, url: str = URL, refresh: str = "always") -> str:
@@ -219,8 +241,8 @@ async def test_a_tag_ref_follows_releases_over_newer_version_tags() -> None:
     tracked.remote.tag(URL, "v1.0.0", "c1")
     tracked.remote.tag(URL, "v1.1.0", "c2")
     tracked.remote.tag(URL, "v2.0.0", "c3")
-    tracked.releases.release(URL, "v1.0.0")
-    newer = tracked.releases.release(URL, "v1.1.0")
+    tracked.github.release(URL, "v1.0.0")
+    newer = tracked.github.release(URL, "v1.1.0")
 
     await tracked.poll(on_ref("v1.0.0"))
 
@@ -256,11 +278,11 @@ async def test_an_unset_ref_follows_releases_starting_from_the_newest() -> None:
     tracked.remote.branch(URL, "main", "c9")
     tracked.remote.tag(URL, "v1.0.0", "c1")
     tracked.remote.tag(URL, "v1.1.0", "c2")
-    tracked.releases.release(URL, "v1.0.0")
+    tracked.github.release(URL, "v1.0.0")
     await tracked.poll(on_ref(None))
     assert tracked.shown() == (versions("v1.0.0", "v1.0.0"),)
 
-    newer = tracked.releases.release(URL, "v1.2.0")
+    newer = tracked.github.release(URL, "v1.2.0")
     tracked.remote.tag(URL, "v1.2.0", "c3")
     await tracked.poll()
 
@@ -338,7 +360,7 @@ async def test_a_first_release_switches_a_tag_ref_from_version_tags_to_releases(
     await tracked.poll(on_ref("v1.4.0"))
     assert tracked.shown() == (versions("v1.4.0", "v1.6.0"),)
 
-    release = tracked.releases.release(URL, "v1.5.0")
+    release = tracked.github.release(URL, "v1.5.0")
     await tracked.poll()
 
     assert tracked.shown() == (versions("v1.4.0", "v1.5.0", release),)
@@ -392,13 +414,13 @@ async def test_nothing_newer_is_offered_while_github_has_never_answered() -> Non
     tracked = InMemoryTrackedConfig()
     tracked.remote.tag(URL, "v1.0.0", "c1")
     tracked.remote.tag(URL, "v2.0.0", "c2")
-    tracked.releases.release(URL, "v1.0.0")
-    newer = tracked.releases.release(URL, "v1.1.0")
-    tracked.releases.failing.add(URL)
+    tracked.github.release(URL, "v1.0.0")
+    newer = tracked.github.release(URL, "v1.1.0")
+    tracked.github.failing.add(URL)
     await tracked.poll(on_ref("v1.0.0"))
     assert tracked.shown() == (versions("v1.0.0", "v1.0.0"),)
 
-    tracked.releases.failing.clear()
+    tracked.github.failing.clear()
     await tracked.poll()
 
     assert tracked.shown() == (versions("v1.0.0", "v1.1.0", newer),)
@@ -408,11 +430,11 @@ async def test_github_failing_keeps_its_last_answer() -> None:
     tracked = InMemoryTrackedConfig()
     tracked.remote.tag(URL, "v1.0.0", "c1")
     tracked.remote.tag(URL, "v2.0.0", "c2")
-    tracked.releases.release(URL, "v1.0.0")
-    newer = tracked.releases.release(URL, "v1.1.0")
+    tracked.github.release(URL, "v1.0.0")
+    newer = tracked.github.release(URL, "v1.1.0")
     await tracked.poll(on_ref("v1.0.0"))
 
-    tracked.releases.failing.add(URL)
+    tracked.github.failing.add(URL)
     await tracked.poll()
 
     assert tracked.shown() == (versions("v1.0.0", "v1.1.0", newer),)
@@ -422,11 +444,11 @@ async def test_a_tag_ref_github_answers_has_no_releases_follows_its_version_tags
     tracked = InMemoryTrackedConfig()
     tracked.remote.tag(URL, "v1.4.0", "c1")
     tracked.remote.tag(URL, "v1.5.0", "c2")
-    tracked.releases.failing.add(URL)
+    tracked.github.failing.add(URL)
     await tracked.poll(on_ref("v1.4.0"))
     assert tracked.shown() == (versions("v1.4.0", "v1.4.0"),)
 
-    tracked.releases.failing.clear()
+    tracked.github.failing.clear()
     await tracked.poll()
 
     assert tracked.shown() == (versions("v1.4.0", "v1.5.0"),)
@@ -436,13 +458,13 @@ async def test_an_unset_ref_shows_no_version_until_github_answers() -> None:
     tracked = InMemoryTrackedConfig()
     tracked.remote.branch(URL, "main", "c9")
     tracked.remote.tag(URL, "v1.4.0", "c1")
-    tracked.releases.failing.add(URL)
+    tracked.github.failing.add(URL)
     await tracked.poll(on_ref(None))
     assert tracked.shown() == (versions("", ""),)
     assert tracked.record.tags == {}
 
     tracked.remote.tag(URL, "v1.5.0", "c2")
-    tracked.releases.failing.clear()
+    tracked.github.failing.clear()
     await tracked.poll()
 
     # GitHub answered "no Releases" at last: it follows Version Tags from v1.5.0 on.
@@ -519,10 +541,10 @@ async def test_a_failing_github_is_warned_about_once_and_its_return_logged(
     tracked.remote.tag(URL, "v1.0.0", "c1")
     await tracked.poll(on_ref("v1.0.0"))
 
-    tracked.releases.failing.add(URL)
+    tracked.github.failing.add(URL)
     await tracked.poll()
     await tracked.poll()
-    tracked.releases.failing.clear()
+    tracked.github.failing.clear()
     await tracked.poll()
 
     assert _logged(caplog) == [
@@ -534,6 +556,138 @@ async def test_a_failing_github_is_warned_about_once_and_its_return_logged(
             ),
         ),
         ("INFO", f"node: GitHub lists the Releases of {URL} again"),
+    ]
+
+
+# Comparing changes on GitHub, for release notes.
+
+
+async def test_a_change_is_compared_during_a_poll_and_shown_with_its_commits() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    await tracked.poll(on_ref("dev"))
+    comparison = tracked.github.comparison(URL, "c1", "c2")
+
+    tracked.remote.branch(URL, "dev", "c2")
+    await tracked.poll()
+
+    assert tracked.shown() == (ShownSource("marsrelay", "c1", "c2", comparison),)
+
+
+async def test_a_change_is_compared_once_while_its_commits_stay_the_same() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    await tracked.poll(on_ref("dev"))
+    tracked.github.comparison(URL, "c1", "c2")
+    tracked.remote.branch(URL, "dev", "c2")
+    await tracked.poll()
+
+    await tracked.poll()
+    assert not await tracked.followed.async_compare_missing()
+
+    assert tracked.github.compared == [(URL, "c1", "c2")]
+
+
+async def test_a_failed_comparison_is_asked_for_again_on_the_next_poll() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    await tracked.poll(on_ref("dev"))
+    comparison = tracked.github.comparison(URL, "c1", "c2")
+    tracked.github.compare_failing = True
+    tracked.remote.branch(URL, "dev", "c2")
+    await tracked.poll()
+
+    tracked.github.compare_failing = False
+    await tracked.poll()
+
+    assert tracked.github.compared == [(URL, "c1", "c2"), (URL, "c1", "c2")]
+    assert tracked.shown() == (ShownSource("marsrelay", "c1", "c2", comparison),)
+
+
+async def test_a_failed_comparison_is_asked_for_again_when_compare_missing_is_asked() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    await tracked.poll(on_ref("dev"))
+    comparison = tracked.github.comparison(URL, "c1", "c2")
+    tracked.github.compare_failing = True
+    tracked.remote.branch(URL, "dev", "c2")
+    await tracked.poll()
+    assert not await tracked.followed.async_compare_missing()
+
+    tracked.github.compare_failing = False
+
+    assert await tracked.followed.async_compare_missing()
+    assert tracked.shown() == (ShownSource("marsrelay", "c1", "c2", comparison),)
+
+
+async def test_compare_missing_without_a_change_to_compare_has_nothing_arrive() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    await tracked.poll(on_ref("dev"))
+    # GitHub lists nothing for it, as for a Source not on GitHub.
+    tracked.remote.branch(URL, "dev", "c2")
+    await tracked.poll()
+
+    assert not await tracked.followed.async_compare_missing()
+    assert tracked.shown() == (ShownSource("marsrelay", "c1", "c2"),)
+
+
+async def test_a_comparison_whose_change_is_gone_is_forgotten() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    await tracked.poll(on_ref("dev"))
+    tracked.github.comparison(URL, "c1", "c2")
+    tracked.remote.branch(URL, "dev", "c2")
+    await tracked.poll()
+
+    # The push is undone, then made again.
+    tracked.remote.branch(URL, "dev", "c1")
+    await tracked.poll()
+    tracked.remote.branch(URL, "dev", "c2")
+    await tracked.poll()
+
+    assert tracked.github.compared == [(URL, "c1", "c2"), (URL, "c1", "c2")]
+
+
+async def test_a_compare_failure_does_not_fail_the_poll() -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    await tracked.poll(on_ref("dev"))
+    tracked.github.compare_failing = True
+
+    tracked.remote.branch(URL, "dev", "c2")
+    await tracked.poll()
+
+    assert tracked.shown() == (ShownSource("marsrelay", "c1", "c2"),)
+    assert tracked.followed.changes() == [SourceChange(f"{URL}@dev", URL, "c1", "c2")]
+
+
+async def test_a_failing_compare_is_warned_about_once_and_its_return_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tracked = InMemoryTrackedConfig()
+    tracked.remote.branch(URL, "dev", "c1")
+    tracked.remote.branch(OTHER, "dev", "s1")
+    await tracked.poll(config(source("dev"), source("dev", url=OTHER)))
+    tracked.github.compare_failing = True
+    tracked.remote.branch(URL, "dev", "c2")
+    tracked.remote.branch(OTHER, "dev", "s2")
+
+    await tracked.poll()
+    await tracked.poll()
+    await tracked.followed.async_compare_missing()
+    tracked.github.compare_failing = False
+    await tracked.poll()
+
+    assert _logged(caplog) == [
+        (
+            "WARNING",
+            (
+                "node: release notes show only commit changes while GitHub cannot be "
+                "asked: GitHub cannot be reached"
+            ),
+        ),
+        ("INFO", "node: GitHub answers again"),
     ]
 
 
@@ -584,8 +738,8 @@ async def test_an_unset_ref_that_followed_commits_before_starts_from_the_newest_
     tracked.remote.branch(URL, "main", "c9")
     tracked.remote.tag(URL, "v1.4.0", "c1")
     tracked.remote.tag(URL, "v1.5.0", "c2")
-    tracked.releases.release(URL, "v1.4.0")
-    tracked.releases.release(URL, "v1.5.0")
+    tracked.github.release(URL, "v1.4.0")
+    tracked.github.release(URL, "v1.5.0")
     # Recorded before the upgrade, when every Unset Ref followed its Latest Commit.
     tracked.record.commits[f"{URL}@HEAD"] = "c0"
 
@@ -686,8 +840,8 @@ async def test_an_install_moves_a_tag_ref_to_the_newest_release_not_a_newer_tag(
     tracked.remote.tag(URL, "v1.5.0", "c2")
     # A Version Tag without a Release.
     tracked.remote.tag(URL, "v1.7.0", "c3")
-    tracked.releases.release(URL, "v1.4.0")
-    tracked.releases.release(URL, "v1.5.0")
+    tracked.github.release(URL, "v1.4.0")
+    tracked.github.release(URL, "v1.5.0")
 
     snapshot = await tracked.poll(on_ref("v1.4.0"))
 

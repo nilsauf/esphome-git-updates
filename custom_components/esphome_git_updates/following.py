@@ -13,6 +13,10 @@ and tags to install and which YAML to rewrite, or refuses when its pre-install
 checks fail (no OTA platform, or a Source following its Latest Commit without
 Refresh Policy `always`).
 
+It also keeps GitHub's comparison of each changed Source, for release notes:
+compared once while the change's two commits stay the same, asked again after a
+failure, forgotten once the change is gone.
+
 No Home Assistant imports: the remote, GitHub and the installed record are
 ports handed in.
 """
@@ -25,9 +29,8 @@ from collections.abc import AsyncIterator, Callable, Collection, Iterable, Mappi
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
-from .comparisons import SourceChange
 from .git_remote import GitRemoteError, RemoteRef, RemoteRefKind, RemoteTags
 from .git_sources import (
     OTA_PLATFORMS,
@@ -60,12 +63,17 @@ class Remote(Protocol):
         ...
 
 
-class Releases(Protocol):
-    """GitHub's Releases of a repository."""
+class GitHub(Protocol):
+    """What GitHub knows of a Source's repository, asked by its url."""
 
     async def releases(self, url: str) -> tuple[Release, ...]:
         """The Releases of the repository at *url*: empty when it has none or is not on
         GitHub; raises GitHubError if GitHub cannot be asked."""
+        ...
+
+    async def compare(self, url: str, base: str, head: str) -> Comparison | None:
+        """The commits of the repository at *url* after *base* up to *head*: None when it
+        is not on GitHub; raises GitHubError if GitHub cannot be asked."""
         ...
 
 
@@ -91,10 +99,13 @@ class InstalledRecord(InstalledVersions, Protocol):
         ...
 
 
-class Comparisons(Protocol):
-    """The commits between two commits of a Source, when GitHub was asked for them."""
+class SourceChange(NamedTuple):
+    """A Git Source whose Latest Commit differs from its Installed Commit."""
 
-    def get(self, key: str, installed: str | None, latest: str) -> Comparison | None: ...
+    key: str
+    url: str
+    installed: str
+    latest: str
 
 
 # A ref's location, and the tag to write there.
@@ -113,7 +124,7 @@ class _CommitFollowingSource:
     def key(self) -> str:
         return self.source.key
 
-    def shown(self, installed: InstalledVersions, comparisons: Comparisons) -> ShownSource:
+    def shown(self, installed: InstalledVersions, comparisons: _ComparisonCache) -> ShownSource:
         commit = installed.installed_commit(self.key)
         return ShownSource(
             self.source.name,
@@ -179,7 +190,7 @@ class _VersionFollowingSource:
             return None
         return self.offered("") or None
 
-    def shown(self, installed: InstalledVersions, comparisons: Comparisons) -> ShownSource:
+    def shown(self, installed: InstalledVersions, comparisons: _ComparisonCache) -> ShownSource:
         tag, offered = self._installed_and_offered(installed)
         offered_commit = self.version_tags.get(offered)
         comparison = (
@@ -359,6 +370,33 @@ class Snapshot:
         return _plan_install(self.followed.values(), self.record, self.files, port, clean_build)
 
 
+@dataclass(frozen=True)
+class _Compared:
+    """GitHub's comparison of a change."""
+
+    change: SourceChange
+    comparison: Comparison
+
+
+class _ComparisonCache:
+    """GitHub's comparison of each change, by the key of its Source."""
+
+    def __init__(self) -> None:
+        self.compared: dict[str, _Compared] = {}
+
+    def get(self, key: str, installed: str | None, latest: str) -> Comparison | None:
+        """The commits from *installed* to *latest* of the Source with *key*, if GitHub
+        listed them."""
+        compared = self.compared.get(key)
+        if compared is None or compared.change[2:] != (installed, latest):
+            return None
+        return compared.comparison
+
+
+# The key GitHub's compare failures are warned about under: one for the Tracked Config.
+_COMPARE = "compare"
+
+
 class _Outages:
     """What cannot be asked, by key: warned about once, and logged when it can be again."""
 
@@ -407,44 +445,89 @@ class FollowedSources:
     def __init__(
         self,
         remote: Remote,
-        releases: Releases,
+        github: GitHub,
         record: InstalledRecord,
         title: Callable[[], str],
     ) -> None:
         self._remote = remote
-        self._releases = releases
+        self._github = github
         self._record = record
         self._last = _nothing_polled(record)
         # Each repository's Releases at GitHub's last answer, by url.
         self._answers: dict[str, tuple[Release, ...]] = {}
-        # The keys of Sources whose remote fails, and the urls GitHub fails for.
+        self._comparisons = _ComparisonCache()
+        # The keys of Sources whose remote fails, the urls GitHub cannot list the
+        # Releases of, and whether GitHub cannot compare.
         self._remote_outages = _Outages(title)
         self._releases_outages = _Outages(title)
+        self._compare_outages = _Outages(title)
 
     @asynccontextmanager
     async def async_poll(
         self, discovery: Discovery, files: Mapping[str, str]
     ) -> AsyncIterator[Snapshot]:
         """Ask the remote of each Source *discovery* found, and GitHub for the Releases of
-        each following versions; seed new Sources and forget removed ones (ADR-0003).
+        each following versions; seed new Sources and forget removed ones (ADR-0003);
+        then ask GitHub to compare each change not compared yet.
 
         *files* is the text of each file *discovery* was read from, by path.
         Within the block, queries answer from this poll. If the block raises,
         the poll is dropped: queries, and the next poll, go back to the last
-        one (the seeds and GitHub's answers stay).
+        one (the seeds and GitHub's answers stay). GitHub that cannot compare
+        neither fails nor drops the poll.
         """
         previous = self._last
         self._last = await self._poll(discovery, files)
         try:
+            await self.async_compare_missing()
             yield self._last
         except BaseException:
             self._last = previous
             raise
 
-    def shown(self, comparisons: Comparisons) -> tuple[ShownSource, ...]:
-        """Each Followed Source, installed against latest, as the entity shows it."""
+    async def async_compare_missing(self) -> bool:
+        """Ask GitHub to compare each change still without a comparison; return whether
+        any arrived. Only the comparisons of the changes are kept, so a change is
+        compared once, and one that failed is asked for again next time."""
+        changes = self.changes()
+        kept = {
+            change.key: self._comparisons.compared[change.key]
+            for change in changes
+            if self._comparisons.get(change.key, change.installed, change.latest) is not None
+        }
+        wanted = [change for change in changes if change.key not in kept]
+        results = await asyncio.gather(
+            *(
+                self._github.compare(change.url, change.installed, change.latest)
+                for change in wanted
+            ),
+            return_exceptions=True,
+        )
+        failure: GitHubError | None = None
+        for change, result in zip(wanted, results, strict=True):
+            if isinstance(result, GitHubError):
+                failure = failure or result
+            elif isinstance(result, BaseException):
+                raise result
+            elif result is not None:
+                kept[change.key] = _Compared(change, result)
+        if failure is not None:
+            self._compare_outages.failed(
+                _COMPARE,
+                "release notes show only commit changes while GitHub cannot be asked: %s",
+                failure,
+            )
+        elif wanted:
+            self._compare_outages.recovered(_COMPARE, "GitHub answers again")
+        self._comparisons.compared = kept
+        return any(change.key in kept for change in wanted)
+
+    def shown(self) -> tuple[ShownSource, ...]:
+        """Each Followed Source, installed against latest, as the entity shows it, with
+        the commits GitHub listed for its change."""
         return tuple(
-            followed.shown(self._record, comparisons) for followed in self._last.followed.values()
+            followed.shown(self._record, self._comparisons)
+            for followed in self._last.followed.values()
         )
 
     def changes(self) -> list[SourceChange]:
@@ -523,7 +606,7 @@ class FollowedSources:
         GitHub's last answer; the answers for any other repository are forgotten."""
         urls = [each.key for each in _following_versions(followed.values())]
         results = await asyncio.gather(
-            *(self._releases.releases(url) for url in urls), return_exceptions=True
+            *(self._github.releases(url) for url in urls), return_exceptions=True
         )
         answers = {url: self._answers[url] for url in urls if url in self._answers}
         for url, result in zip(urls, results, strict=True):

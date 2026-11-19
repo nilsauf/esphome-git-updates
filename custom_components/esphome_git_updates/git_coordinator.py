@@ -7,9 +7,9 @@ from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .comparisons import GitHubComparisons
 from .connection import DeviceBuilderSession, DeviceBuilderUnavailable, ProtocolProblem
 from .const import CONF_CONFIGURATION, DOMAIN
 from .coordinator import EsphomeGitUpdatesConfigEntry, TrackedConfigStore
@@ -17,10 +17,10 @@ from .device_builder import CommandFailed, DeviceBuilderClient
 from .following import FollowedSources, Refusal, Snapshot
 from .git_remote import LsRemote
 from .git_sources import Discovery, DiscoveryError, Reader, discover_git_sources
+from .github import GitHub
 from .install import InstallPlan
 from .options import Options
 from .pre_install import PreInstallIssues
-from .releases import GitHubReleases
 from .versions import ShownSource
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,9 +46,8 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
     """Polls the Followed Sources of a Tracked Config for Home Assistant.
 
     Each poll reads the Tracked Config and every file it includes over `/ws`
-    (ADR-0006), then has `FollowedSources` ask every remote and GitHub. Each
-    changed Git Source on GitHub is then compared over GitHub's API, for
-    release notes only.
+    (ADR-0006), then has `FollowedSources` ask every remote and GitHub, which
+    also compares each changed Git Source on GitHub, for release notes only.
     """
 
     config_entry: EsphomeGitUpdatesConfigEntry
@@ -70,11 +69,15 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
         self._session = session
         self._untrackable: tuple[str, ...] = ()
         self._pre_install_issues = PreInstallIssues(hass, entry)
-        self.comparisons = GitHubComparisons(hass, entry)
+        # Renaming the entry, or changing its options, does not reload it: log under
+        # its title of the moment, and send the token of the moment.
         self._followed = FollowedSources(
-            # Renaming the entry does not reload it: log under its title of the moment.
             LsRemote(),
-            GitHubReleases(hass, entry),
+            GitHub(
+                async_get_clientsession(hass),
+                lambda: Options.of(entry.options).github_token,
+                lambda: entry.title,
+            ),
             store,
             lambda: entry.title,
         )
@@ -127,12 +130,12 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
 
     async def async_compare_changed(self) -> None:
         """Ask GitHub again for any change whose comparison is missing."""
-        if await self.comparisons.async_update(self._followed.changes()):
+        if await self._followed.async_compare_missing():
             self.async_update_listeners()
 
     def shown_sources(self) -> tuple[ShownSource, ...]:
         """Each tracked Git Source, installed against latest, as the entity shows it."""
-        return self._followed.shown(self.comparisons)
+        return self._followed.shown()
 
     async def _discover(self) -> tuple[Discovery, dict[str, str]]:
         """The Git Sources of the Tracked Config, and the text of each file read."""
@@ -162,14 +165,13 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
             raise UpdateFailed(f"cannot read the Git Sources of {configuration}: {err}") from err
 
     async def _async_poll_now(self) -> Snapshot:
-        """Poll the Followed Sources now, reporting the pre-install check and
-        comparing changes; raise UpdateFailed when the YAML cannot be read."""
+        """Poll the Followed Sources now, reporting the pre-install check; raise
+        UpdateFailed when the YAML cannot be read."""
         discovery, files = await self._discover()
         self._log_untrackable(discovery.untrackable)
         # A poll that fails from here on changes nothing it saw.
         async with self._followed.async_poll(discovery, files) as snapshot:
             self._pre_install_issues.report(snapshot.check)
-            await self.comparisons.async_update(self._followed.changes())
         return snapshot
 
     def _log_untrackable(self, untrackable: tuple[str, ...]) -> None:

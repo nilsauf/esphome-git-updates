@@ -300,13 +300,13 @@ async def test_a_poll_that_fails_after_asking_the_remotes_keeps_what_the_last_po
 ) -> None:
     entry = await set_up(hass, builder)
     git = entry.runtime_data.git_coordinator
-    compare = git.comparisons.async_update
+    compare = git._followed.async_compare_missing
 
-    async def fail_once(changes: Any) -> bool:
-        git.comparisons.async_update = compare
+    async def fail_once() -> bool:
+        git._followed.async_compare_missing = compare
         raise RuntimeError("unexpected")
 
-    git.comparisons.async_update = fail_once
+    git._followed.async_compare_missing = fail_once
     marsrelay.push()
     await git.async_refresh()
     assert not git.last_update_success
