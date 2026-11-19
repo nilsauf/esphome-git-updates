@@ -1,6 +1,6 @@
 # 01: The Installed Record module, behind a storage seam
 
-Status: ready-for-agent
+Status: resolved
 
 **What to build:** as specified in `../spec.md` under "The Installed Record", "The storage seam" and the commit, tag and Install parts of "Interface".
 
@@ -14,11 +14,11 @@ Status: ready-for-agent
 
 **Blocked by:** none
 
-- [ ] New plain pytest tests drive the record over in-memory storage, with no HA fixture:
+- [x] New plain pytest tests drive the record over in-memory storage, with no HA fixture:
   - seeding only where nothing is recorded; forgetting what is no longer present; a returning Source seeded afresh;
   - one save for both kinds, and no save when nothing changed;
   - recording an Install merges the versions and clears the active Install;
   - the active Install round-trips and survives a reload from the same storage.
-- [ ] The Followed Sources tests use the real record over in-memory storage. Their own fake record is deleted, and their scenarios are unchanged.
-- [ ] The record module imports nothing from Home Assistant.
-- [ ] The full test suite passes, and `ruff` is clean.
+- [x] The Followed Sources tests use the real record over in-memory storage. Their own fake record is deleted, and their scenarios are unchanged.
+- [x] The record module imports nothing from Home Assistant.
+- [x] The full test suite passes, and `ruff` is clean.
