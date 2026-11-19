@@ -1,6 +1,6 @@
 # One GitHub adapter behind Followed Sources: spec
 
-Status: ready-for-agent
+Status: resolved
 
 Terms are defined in `GLOSSARY.md`. Relevant decisions: ADR-0003 (the integration records Installed Commits), ADR-0007 (an Install rewrites Tag Refs; GitHub's last answer about Releases is kept while it cannot be asked).
 
