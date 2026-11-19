@@ -79,6 +79,10 @@ The ESPHome version the Linked Device reports it is running, falling back to the
 The ESPHome version the Device Builder would compile with, not the newest ESPHome release.
 _Avoid_: latest ESPHome
 
+**Installed Record**:
+What the integration remembers about one Tracked Config: the Installed ESPHome Version, Installed Commits and Installed Tags of its last successful Install, the seeds that stand in for them until then, and the Install still running, if any.
+_Avoid_: store, state (when meaning what the integration remembers)
+
 **Refresh Policy**:
 How long ESPHome reuses its cached clone of a Git Source before fetching again; Tracked Configs need it set to "always".
 
