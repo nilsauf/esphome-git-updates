@@ -96,9 +96,7 @@ class TrackedConfigStore:
         """The Installed Commit of the Git Source with *source_key*, if any."""
         return self._data.get("installed_commits", {}).get(source_key)
 
-    async def async_seed_commits(
-        self, seeds: Mapping[str, str], present: Collection[str]
-    ) -> None:
+    async def async_seed_commits(self, seeds: Mapping[str, str], present: Collection[str]) -> None:
         """Seed Git Sources that have no Installed Commit yet with their Latest Commit.
 
         Sources no longer in the YAML (not in *present*) are forgotten, so one

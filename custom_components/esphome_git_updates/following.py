@@ -26,8 +26,7 @@ from .git_remote import GitRemoteError, RemoteRefKind, RemoteTags
 from .git_sources import Discovery, GitSource, RefKind, RefLocation, rewritten
 from .github import Comparison, GitHubError, Release
 from .install import InstallPlan, YamlRewrite
-from .version_tags import Version
-from .version_tags import is_version_tag
+from .version_tags import Version, is_version_tag
 from .versions import ShownSource
 
 _LOGGER = logging.getLogger(__name__)
@@ -62,9 +61,7 @@ class InstalledVersions(Protocol):
 class InstalledRecord(InstalledVersions, Protocol):
     """The installed record, which new Sources are seeded into (ADR-0003)."""
 
-    async def async_seed_commits(
-        self, seeds: Mapping[str, str], present: Collection[str]
-    ) -> None:
+    async def async_seed_commits(self, seeds: Mapping[str, str], present: Collection[str]) -> None:
         """Record *seeds* (by key) where no Installed Commit is recorded yet, and forget
         every key not in *present*."""
         ...
@@ -370,9 +367,7 @@ class FollowedSources:
         """
         following_commits = _latest_commits(self._last._followed.values())
         return tuple(
-            source
-            for source in self._last._wrong_refresh_policy
-            if source.key in following_commits
+            source for source in self._last._wrong_refresh_policy if source.key in following_commits
         )
 
     async def _ask_remote(self, source: GitSource) -> _FollowedSource:
