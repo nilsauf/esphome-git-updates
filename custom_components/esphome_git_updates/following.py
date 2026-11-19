@@ -382,15 +382,36 @@ class _ComparisonCache:
     """GitHub's comparison of each change, by the key of its Source."""
 
     def __init__(self) -> None:
-        self.compared: dict[str, _Compared] = {}
+        self._compared: dict[str, _Compared] = {}
 
     def get(self, key: str, installed: str | None, latest: str) -> Comparison | None:
         """The commits from *installed* to *latest* of the Source with *key*, if GitHub
         listed them."""
-        compared = self.compared.get(key)
-        if compared is None or compared.change[2:] != (installed, latest):
+        compared = self._compared.get(key)
+        if compared is None:
+            return None
+        change = compared.change
+        if change.installed != installed or change.latest != latest:
             return None
         return compared.comparison
+
+    def missing(self, changes: Iterable[SourceChange]) -> list[SourceChange]:
+        """Those of *changes* without a comparison."""
+        return [change for change in changes if not self._has(change)]
+
+    def keep_only(
+        self, changes: Iterable[SourceChange], arrived: Iterable[tuple[SourceChange, Comparison]]
+    ) -> None:
+        """Keep the comparisons of *changes* only, with those *arrived* added."""
+        self._compared = {
+            change.key: self._compared[change.key] for change in changes if self._has(change)
+        }
+        self._compared.update(
+            (change.key, _Compared(change, comparison)) for change, comparison in arrived
+        )
+
+    def _has(self, change: SourceChange) -> bool:
+        return self.get(change.key, change.installed, change.latest) is not None
 
 
 # The key GitHub's compare failures are warned about under: one for the Tracked Config.
@@ -490,12 +511,7 @@ class FollowedSources:
         any arrived. Only the comparisons of the changes are kept, so a change is
         compared once, and one that failed is asked for again next time."""
         changes = self.changes()
-        kept = {
-            change.key: self._comparisons.compared[change.key]
-            for change in changes
-            if self._comparisons.get(change.key, change.installed, change.latest) is not None
-        }
-        wanted = [change for change in changes if change.key not in kept]
+        wanted = self._comparisons.missing(changes)
         results = await asyncio.gather(
             *(
                 self._github.compare(change.url, change.installed, change.latest)
@@ -504,13 +520,14 @@ class FollowedSources:
             return_exceptions=True,
         )
         failure: GitHubError | None = None
+        arrived: list[tuple[SourceChange, Comparison]] = []
         for change, result in zip(wanted, results, strict=True):
             if isinstance(result, GitHubError):
                 failure = failure or result
             elif isinstance(result, BaseException):
                 raise result
             elif result is not None:
-                kept[change.key] = _Compared(change, result)
+                arrived.append((change, result))
         if failure is not None:
             self._compare_outages.failed(
                 _COMPARE,
@@ -520,8 +537,8 @@ class FollowedSources:
         elif any(result is not None for result in results):
             # None is the adapter's answer for a url not on GitHub: GitHub was not asked.
             self._compare_outages.recovered(_COMPARE, "GitHub answers again")
-        self._comparisons.compared = kept
-        return any(change.key in kept for change in wanted)
+        self._comparisons.keep_only(changes, arrived)
+        return bool(arrived)
 
     def shown(self) -> tuple[ShownSource, ...]:
         """Each Followed Source, installed against latest, as the entity shows it, with
