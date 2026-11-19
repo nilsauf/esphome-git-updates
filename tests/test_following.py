@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 
+import pytest
+
 from custom_components.esphome_git_updates.comparisons import SourceChange
 from custom_components.esphome_git_updates.following import FollowedSources, Snapshot
 from custom_components.esphome_git_updates.git_remote import (
@@ -152,6 +154,15 @@ def versions(installed: str, offered: str, *releases: Release) -> ShownSource:
     return ShownSource("marsrelay", installed, offered, versions=True, releases=releases)
 
 
+def _logged(caplog: pytest.LogCaptureFixture) -> list[tuple[str, str]]:
+    """What FollowedSources logged, by level, in order."""
+    return [
+        (record.levelname, record.getMessage())
+        for record in caplog.records
+        if record.name == "custom_components.esphome_git_updates.following"
+    ]
+
+
 # Each follow mode.
 
 
@@ -265,6 +276,46 @@ async def test_an_unset_ref_where_no_ref_can_be_inserted_follows_its_latest_comm
     assert following.shown() == (ShownSource("marsrelay", "c1", "c2"),)
 
 
+async def test_a_moved_version_tag_offers_nothing() -> None:
+    following = Following()
+    following.remote.tag(URL, "v1.2.3", "c1")
+    await following.poll(on_ref("v1.2.3"))
+
+    following.remote.tag(URL, "v1.2.3", "c2")
+    await following.poll()
+
+    assert following.shown() == (versions("v1.2.3", "v1.2.3"),)
+    assert following.followed.changes() == []
+
+
+async def test_a_tag_ref_is_never_offered_an_equal_or_older_version() -> None:
+    following = Following()
+    following.remote.tag(URL, "v1.9.0", "c1")
+    following.remote.tag(URL, "v2.0.0", "c2")
+    await following.poll(on_ref("v2.0.0"))
+
+    # Equal to v2.0.0, and a prerelease: neither is newer.
+    following.remote.tag(URL, "2.0", "c3")
+    following.remote.tag(URL, "v2.1.0-rc1", "c4")
+    await following.poll()
+
+    assert following.shown() == (versions("v2.0.0", "v2.0.0"),)
+
+
+async def test_a_first_release_switches_a_tag_ref_from_version_tags_to_releases() -> None:
+    following = Following()
+    following.remote.tag(URL, "v1.4.0", "c1")
+    following.remote.tag(URL, "v1.5.0", "c2")
+    following.remote.tag(URL, "v1.6.0", "c3")
+    await following.poll(on_ref("v1.4.0"))
+    assert following.shown() == (versions("v1.4.0", "v1.6.0"),)
+
+    release = following.releases.release(URL, "v1.5.0")
+    await following.poll()
+
+    assert following.shown() == (versions("v1.4.0", "v1.5.0", release),)
+
+
 # Remotes and GitHub that cannot be asked.
 
 
@@ -339,6 +390,88 @@ async def test_github_failing_keeps_its_last_answer() -> None:
     assert following.shown() == (versions("v1.0.0", "v1.1.0", newer),)
 
 
+async def test_a_tag_ref_github_answers_has_no_releases_follows_its_version_tags() -> None:
+    following = Following()
+    following.remote.tag(URL, "v1.4.0", "c1")
+    following.remote.tag(URL, "v1.5.0", "c2")
+    following.releases.failing.add(URL)
+    await following.poll(on_ref("v1.4.0"))
+    assert following.shown() == (versions("v1.4.0", "v1.4.0"),)
+
+    following.releases.failing.clear()
+    await following.poll()
+
+    assert following.shown() == (versions("v1.4.0", "v1.5.0"),)
+
+
+async def test_an_unset_ref_shows_no_version_until_github_answers() -> None:
+    following = Following()
+    following.remote.branch(URL, "main", "c9")
+    following.remote.tag(URL, "v1.4.0", "c1")
+    following.releases.failing.add(URL)
+    await following.poll(on_ref(None))
+    assert following.shown() == (versions("", ""),)
+    assert following.record.tags == {}
+
+    following.remote.tag(URL, "v1.5.0", "c2")
+    following.releases.failing.clear()
+    await following.poll()
+
+    # GitHub answered "no Releases" at last: it follows Version Tags from v1.5.0 on.
+    assert following.shown() == (versions("v1.5.0", "v1.5.0"),)
+    assert following.record.tags == {URL: "v1.5.0"}
+
+
+async def test_a_failing_remote_is_warned_about_once_and_its_return_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    following = Following()
+    following.remote.branch(URL, "dev", "c1")
+    await following.poll(on_ref("dev"))
+
+    following.remote.failing.add(URL)
+    await following.poll()
+    await following.poll()
+    following.remote.failing.clear()
+    await following.poll()
+
+    assert _logged(caplog) == [
+        (
+            "WARNING",
+            (
+                f"node: cannot get the Latest Commit of marsrelay, keeping the last "
+                f"one known: {URL} cannot be reached"
+            ),
+        ),
+        ("INFO", "node: marsrelay is reachable again"),
+    ]
+
+
+async def test_a_failing_github_is_warned_about_once_and_its_return_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    following = Following()
+    following.remote.tag(URL, "v1.0.0", "c1")
+    await following.poll(on_ref("v1.0.0"))
+
+    following.releases.failing.add(URL)
+    await following.poll()
+    await following.poll()
+    following.releases.failing.clear()
+    await following.poll()
+
+    assert _logged(caplog) == [
+        (
+            "WARNING",
+            (
+                f"node: cannot ask GitHub for the Releases of {URL}, keeping the last "
+                "answer: GitHub cannot be reached"
+            ),
+        ),
+        ("INFO", f"node: GitHub lists the Releases of {URL} again"),
+    ]
+
+
 # Seeding the installed record (ADR-0003).
 
 
@@ -364,6 +497,49 @@ async def test_removed_sources_are_forgotten() -> None:
 
     assert following.record.commits == {}
     assert following.record.tags == {}
+
+
+async def test_a_source_added_later_is_seeded_and_offered_its_next_push() -> None:
+    following = Following()
+    following.remote.branch(URL, "dev", "c1")
+    following.remote.branch(OTHER, "dev", "s1")
+    await following.poll(config(source("dev")))
+
+    await following.poll(config(source("dev"), source("dev", url=OTHER)))
+    assert following.record.commits == {f"{URL}@dev": "c1", f"{OTHER}@dev": "s1"}
+
+    following.remote.branch(OTHER, "dev", "s2")
+    await following.poll()
+
+    assert following.followed.changes() == [SourceChange(f"{OTHER}@dev", OTHER, "s1", "s2")]
+
+
+async def test_an_unset_ref_that_followed_commits_before_starts_from_the_newest_release() -> None:
+    following = Following()
+    following.remote.branch(URL, "main", "c9")
+    following.remote.tag(URL, "v1.4.0", "c1")
+    following.remote.tag(URL, "v1.5.0", "c2")
+    following.releases.release(URL, "v1.4.0")
+    following.releases.release(URL, "v1.5.0")
+    # Recorded before the upgrade, when every Unset Ref followed its Latest Commit.
+    following.record.commits[f"{URL}@HEAD"] = "c0"
+
+    await following.poll(on_ref(None))
+
+    assert following.shown() == (versions("v1.5.0", "v1.5.0"),)
+    assert following.record.tags == {URL: "v1.5.0"}
+
+
+async def test_a_tag_changed_in_the_yaml_by_hand_leaves_the_installed_tag_unchanged() -> None:
+    following = Following()
+    following.remote.tag(URL, "v1.4.0", "c1")
+    following.remote.tag(URL, "v1.5.0", "c2")
+    await following.poll(on_ref("v1.4.0"))
+
+    await following.poll(on_ref("v1.5.0"))
+
+    assert following.record.tags == {URL: "v1.4.0"}
+    assert following.shown() == (versions("v1.4.0", "v1.5.0"),)
 
 
 async def test_a_tag_ref_whose_remote_fails_keeps_its_installed_tag() -> None:
@@ -427,6 +603,49 @@ async def test_an_install_plan_rewrites_the_files_as_its_poll_read_them() -> Non
     )
 
 
+async def test_an_install_plan_moves_a_tag_ref_to_the_newest_release_not_a_newer_tag() -> None:
+    following = Following()
+    following.remote.tag(URL, "v1.4.0", "c1")
+    following.remote.tag(URL, "v1.5.0", "c2")
+    # A Version Tag without a Release.
+    following.remote.tag(URL, "v1.7.0", "c3")
+    following.releases.release(URL, "v1.4.0")
+    following.releases.release(URL, "v1.5.0")
+    await following.poll(on_ref("v1.4.0"))
+
+    assert following.followed.install_plan("OTA", False) == InstallPlan(
+        {},
+        "OTA",
+        False,
+        tags={URL: "v1.5.0"},
+        rewrites=(YamlRewrite(CONFIGURATION, on_ref("v1.5.0"), on_ref("v1.4.0")),),
+    )
+
+
+async def test_an_install_plan_leaves_an_unset_ref_unwritten_without_a_newer_version() -> None:
+    following = Following()
+    following.remote.branch(URL, "main", "c9")
+    following.remote.tag(URL, "v1.4.0", "c1")
+    await following.poll(on_ref(None))
+
+    assert following.followed.install_plan("OTA", False) == InstallPlan(
+        {}, "OTA", False, tags={URL: "v1.4.0"}
+    )
+
+
+async def test_an_install_plan_records_a_latest_commit_without_touching_its_ref() -> None:
+    following = Following()
+    following.remote.branch(URL, "main", "c1")
+    following.remote.tag(URL, "v1.0.0", "c0")
+    await following.poll(config(f"  - source: {{type: git, url: {URL}}}\n"))
+    following.remote.branch(URL, "main", "c2")
+    await following.poll()
+
+    assert following.followed.install_plan("OTA", False) == InstallPlan(
+        {f"{URL}@HEAD": "c2"}, "OTA", False
+    )
+
+
 # Refresh Policy (ADR-0004).
 
 
@@ -440,3 +659,18 @@ async def test_only_sources_following_latest_commit_need_refresh_always() -> Non
     )
 
     assert following.followed.wrong_refresh_policy() == (GitSource("marsrelay", URL, "dev"),)
+
+
+async def test_an_unset_ref_needs_refresh_always_only_while_it_follows_its_latest_commit() -> None:
+    following = Following()
+    following.remote.branch(URL, "main", "c1")
+    # A tag that is no Version Tag does not make it follow versions.
+    following.remote.tag(URL, "stable", "c1")
+    unset = on_ref(None).replace("    refresh: always\n", "")
+    await following.poll(unset)
+    assert following.followed.wrong_refresh_policy() == (GitSource("marsrelay", URL, None),)
+
+    following.remote.tag(URL, "v1.4.0", "c2")
+    await following.poll()
+
+    assert following.followed.wrong_refresh_policy() == ()

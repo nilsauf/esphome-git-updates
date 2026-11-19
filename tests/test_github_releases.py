@@ -12,14 +12,13 @@ from typing import Any
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
-from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant, State
 from pytest_homeassistant_custom_component.typing import WebSocketGenerator
 
 from fake_device_builder import FakeDeviceBuilder, serve, server_info
 from fake_github import GITHUB_URL, FakeGitHub
 from git_repo import GitRepo
-from tracked_config import CONFIGURATION, ENTITY_ID, OTA, install, set_up, tick
+from tracked_config import CONFIGURATION, ENTITY_ID, OTA, set_up, tick
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -55,58 +54,6 @@ async def _release_notes(hass: HomeAssistant, ws: WebSocketGenerator) -> str | N
     assert answer["success"], answer
     notes: str | None = answer["result"]
     return notes
-
-
-async def test_a_tag_ref_follows_the_newest_release_not_newer_tags_or_prereleases(
-    hass: HomeAssistant,
-    builder: FakeDeviceBuilder,
-    fake_github: FakeGitHub,
-    marsrelay: GitRepo,
-) -> None:
-    marsrelay.tag("v1.4.0")
-    marsrelay.push()
-    marsrelay.tag("v1.5.0")
-    marsrelay.push()
-    marsrelay.tag("v1.6.0-rc1")
-    marsrelay.push()
-    # A Version Tag without a Release.
-    marsrelay.tag("v1.7.0")
-    fake_github.release(REPO, "v1.4.0")
-    fake_github.release(REPO, "v1.5.0")
-    fake_github.release(REPO, "v1.6.0-rc1", prerelease=True)
-
-    await set_up(hass, builder)
-
-    state = _state(hass)
-    assert state.state == STATE_ON
-    assert state.attributes["latest_version"] == "2026.10.1 (marsrelay v1.5.0)"
-
-
-async def test_install_moves_the_tag_ref_to_the_newest_release_not_a_newer_tag(
-    hass: HomeAssistant,
-    builder: FakeDeviceBuilder,
-    fake_github: FakeGitHub,
-    marsrelay: GitRepo,
-    freezer: FrozenDateTimeFactory,
-) -> None:
-    marsrelay.tag("v1.4.0")
-    marsrelay.push()
-    marsrelay.tag("v1.5.0")
-    marsrelay.push()
-    # A Version Tag without a Release.
-    marsrelay.tag("v1.7.0")
-    fake_github.release(REPO, "v1.4.0")
-    fake_github.release(REPO, "v1.5.0")
-    await set_up(hass, builder)
-
-    await install(hass, builder, "install_clean_success")
-
-    assert builder.files[CONFIGURATION] == _config_on_tag("v1.5.0")
-    state = _state(hass)
-    assert state.state == STATE_OFF
-    assert state.attributes["installed_version"] == "2026.10.1 (marsrelay v1.5.0)"
-    await tick(hass, freezer, 30.1)
-    assert _state(hass).state == STATE_OFF
 
 
 async def test_release_notes_show_each_newer_release_newest_first(
@@ -204,29 +151,7 @@ async def test_releases_are_asked_for_one_page_when_it_holds_a_release(
     assert fake_github.releases_pages == [1]
 
 
-async def test_a_repository_publishing_its_first_release_is_followed_by_releases_next_poll(
-    hass: HomeAssistant,
-    builder: FakeDeviceBuilder,
-    fake_github: FakeGitHub,
-    marsrelay: GitRepo,
-    freezer: FrozenDateTimeFactory,
-) -> None:
-    marsrelay.tag("v1.4.0")
-    marsrelay.push()
-    marsrelay.tag("v1.5.0")
-    marsrelay.push()
-    marsrelay.tag("v1.6.0")
-    await set_up(hass, builder)
-    # No Releases: it follows the Version Tags.
-    assert _state(hass).attributes["latest_version"] == "2026.10.1 (marsrelay v1.6.0)"
-
-    fake_github.release(REPO, "v1.5.0")
-    await tick(hass, freezer, 30.1)
-
-    assert _state(hass).attributes["latest_version"] == "2026.10.1 (marsrelay v1.5.0)"
-
-
-async def test_a_failing_github_keeps_the_last_answer_and_warns_once(
+async def test_every_github_failure_keeps_the_last_answer_rather_than_meaning_none(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
     fake_github: FakeGitHub,
@@ -248,48 +173,7 @@ async def test_a_failing_github_keeps_the_last_answer_and_warns_once(
         await tick(hass, freezer, 30.1)
         assert _state(hass).attributes["latest_version"] == "2026.10.1 (marsrelay v1.5.0)"
 
-    warnings = [
-        record.getMessage()
-        for record in caplog.records
-        if record.levelname == "WARNING" and "Releases" in record.getMessage()
-    ]
-    assert len(warnings) == 1
-    assert "API rate limit exceeded" in warnings[0]
-
-    fake_github.failure = None
-    await tick(hass, freezer, 30.1)
-
-    assert [
-        record.getMessage()
-        for record in caplog.records
-        if record.levelname == "INFO" and "Releases" in record.getMessage()
-    ] == [f"host-node: GitHub lists the Releases of {GITHUB_URL} again"]
-
-
-async def test_a_source_github_never_answered_shows_no_update_until_it_answers(
-    hass: HomeAssistant,
-    builder: FakeDeviceBuilder,
-    fake_github: FakeGitHub,
-    marsrelay: GitRepo,
-    freezer: FrozenDateTimeFactory,
-) -> None:
-    marsrelay.tag("v1.4.0")
-    marsrelay.push()
-    marsrelay.tag("v1.5.0")
-    fake_github.failure = 403
-    await set_up(hass, builder)
-
-    state = _state(hass)
-    assert state.state == STATE_OFF
-    assert state.attributes["latest_version"] == "2026.10.1 (marsrelay v1.4.0)"
-
-    # It answers that there are no Releases: the Version Tags are followed.
-    fake_github.failure = None
-    await tick(hass, freezer, 30.1)
-
-    state = _state(hass)
-    assert state.state == STATE_ON
-    assert state.attributes["latest_version"] == "2026.10.1 (marsrelay v1.5.0)"
+    assert "API rate limit exceeded" in caplog.text
 
 
 async def test_the_github_token_option_is_sent_with_the_releases_request(

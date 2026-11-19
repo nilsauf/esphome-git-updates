@@ -50,19 +50,6 @@ def _state(hass: HomeAssistant) -> Any:
     return state
 
 
-async def test_a_new_entry_seeds_its_git_sources_with_their_latest_commit(
-    hass: HomeAssistant, builder: FakeDeviceBuilder, marsrelay: GitRepo
-) -> None:
-    latest = marsrelay.latest_commit()
-
-    await set_up(hass, builder)
-
-    state = _state(hass)
-    assert state.state == STATE_OFF
-    assert state.attributes["installed_version"] == f"2026.10.1 (marsrelay {latest[:7]})"
-    assert state.attributes["latest_version"] == f"2026.10.1 (marsrelay {latest[:7]})"
-
-
 async def test_a_push_is_offered_as_an_update_at_the_next_30_minute_poll(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
@@ -83,9 +70,7 @@ async def test_a_push_is_offered_as_an_update_at_the_next_30_minute_poll(
     assert state.state == STATE_ON
     assert state.attributes["installed_version"] == f"2026.10.1 (marsrelay {installed[:7]})"
     assert state.attributes["latest_version"] == f"2026.10.1 (marsrelay {pushed[:7]})"
-    assert state.attributes["release_summary"] == (
-        f"marsrelay {installed[:7]} → {pushed[:7]}"
-    )
+    assert state.attributes["release_summary"] == (f"marsrelay {installed[:7]} → {pushed[:7]}")
 
 
 async def test_a_changed_git_poll_interval_takes_effect_without_a_restart(
@@ -165,58 +150,6 @@ async def test_a_failed_install_records_no_commits(
 
     assert _installed_commits(hass_storage) == {f"{marsrelay.url}@HEAD": seeded}
     assert _state(hass).state == STATE_ON
-
-
-async def test_a_git_source_added_to_the_yaml_later_is_seeded_and_updates_from_its_next_push(
-    hass: HomeAssistant,
-    builder: FakeDeviceBuilder,
-    marsrelay: GitRepo,
-    tmp_path: Path,
-    freezer: FrozenDateTimeFactory,
-) -> None:
-    await set_up(hass, builder)
-    sensors = GitRepo(tmp_path / "sensors")
-    builder.files[CONFIGURATION] = _config(marsrelay.url, sensors.url)
-
-    await tick(hass, freezer, 30.1)
-
-    state = _state(hass)
-    assert state.state == STATE_OFF
-    expected = f"2026.10.1 (marsrelay {marsrelay.latest_commit()[:7]}, sensors {sensors.latest_commit()[:7]})"
-    assert state.attributes["installed_version"] == expected
-
-    seeded = sensors.latest_commit()
-    pushed = sensors.push()
-    await tick(hass, freezer, 30.1)
-
-    state = _state(hass)
-    assert state.state == STATE_ON
-    assert state.attributes["release_summary"] == f"sensors {seeded[:7]} → {pushed[:7]}"
-
-
-async def test_an_unreachable_remote_keeps_its_last_known_latest_commit_and_is_logged(
-    hass: HomeAssistant,
-    builder: FakeDeviceBuilder,
-    marsrelay: GitRepo,
-    tmp_path: Path,
-    freezer: FrozenDateTimeFactory,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    never_reachable = (tmp_path / "never-there").as_uri()
-    builder.files[CONFIGURATION] = _config(marsrelay.url, never_reachable)
-    await set_up(hass, builder)
-    pushed = marsrelay.push()
-    await tick(hass, freezer, 30.1)
-    assert _state(hass).state == STATE_ON
-
-    marsrelay.path.rename(tmp_path / "moved")
-    await tick(hass, freezer, 30.1)
-
-    state = _state(hass)
-    assert state.state == STATE_ON
-    assert state.attributes["latest_version"] == f"2026.10.1 (marsrelay {pushed[:7]})"
-    assert "cannot get the Latest Commit of marsrelay" in caplog.text
-    assert "cannot get the Latest Commit of never-there" in caplog.text
 
 
 async def test_a_refused_include_read_is_a_repair_issue_until_the_include_resolves(
@@ -318,28 +251,21 @@ async def test_a_non_version_tag_is_a_floating_ref_that_follows_its_commit(
     assert _state(hass).state == STATE_OFF
 
 
-@pytest.mark.parametrize("version_tag", ["v1.2.3", "1.2"])
-async def test_a_moved_version_tag_or_a_commit_never_produces_an_update(
+async def test_a_pinned_ref_is_never_followed(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
     marsrelay: GitRepo,
     freezer: FrozenDateTimeFactory,
-    version_tag: str,
 ) -> None:
-    marsrelay.tag(version_tag)
-    commit = marsrelay.latest_commit()
-    builder.files[CONFIGURATION] = _config_at(marsrelay.url, version_tag) + (
-        f"  - source:\n      type: git\n      url: {marsrelay.url}\n      ref: {commit}\n"
-    )
+    builder.files[CONFIGURATION] = _config_at(marsrelay.url, marsrelay.latest_commit())
     await set_up(hass, builder)
 
     marsrelay.push()
-    marsrelay.tag(version_tag)
     await tick(hass, freezer, 30.1)
 
     state = _state(hass)
     assert state.state == STATE_OFF
-    assert state.attributes["installed_version"] == f"2026.10.1 (marsrelay {version_tag})"
+    assert state.attributes["installed_version"] == "2026.10.1"
 
 
 async def test_git_sources_that_cannot_be_read_at_setup_do_not_hold_up_the_esphome_update(
@@ -390,74 +316,6 @@ def _config_on_tag(url: str, ref: str, *, refresh: bool = True) -> str:
         f"esphome:\n  name: host-node\n{OTA}external_components:\n  - source:\n"
         f"      type: git\n      url: {url}\n      ref: {ref}\n{refresh_line}"
     )
-
-
-async def test_a_tag_ref_shows_the_highest_version_tag_ordered_by_version_not_by_date(
-    hass: HomeAssistant, builder: FakeDeviceBuilder, marsrelay: GitRepo
-) -> None:
-    marsrelay.tag("v1.4.0")
-    marsrelay.push()
-    marsrelay.tag("v1.10.0")
-    marsrelay.push()
-    # Tagged last, but lower than v1.10.0.
-    marsrelay.tag("v1.5.0")
-    # Neither is a Version Tag.
-    marsrelay.tag("v1.11.0-rc1")
-    marsrelay.tag("test-foo")
-    builder.files[CONFIGURATION] = _config_on_tag(marsrelay.url, "v1.4.0")
-
-    await set_up(hass, builder)
-
-    # Seeded from the tag the YAML names, so an entry already behind is offered the update.
-    state = _state(hass)
-    assert state.state == STATE_ON
-    assert state.attributes["installed_version"] == "2026.10.1 (marsrelay v1.4.0)"
-    assert state.attributes["latest_version"] == "2026.10.1 (marsrelay v1.10.0)"
-    assert state.attributes["release_summary"] == "marsrelay v1.4.0 → v1.10.0"
-
-
-async def test_a_tag_ref_is_never_offered_an_equal_or_older_version(
-    hass: HomeAssistant,
-    builder: FakeDeviceBuilder,
-    marsrelay: GitRepo,
-    freezer: FrozenDateTimeFactory,
-) -> None:
-    marsrelay.tag("v1.9.0")
-    marsrelay.push()
-    marsrelay.tag("v2.0.0")
-    builder.files[CONFIGURATION] = _config_on_tag(marsrelay.url, "v2.0.0")
-    await set_up(hass, builder)
-
-    marsrelay.push()
-    # Equal to v2.0.0, and newer by date.
-    marsrelay.tag("2.0")
-    marsrelay.tag("v2.1.0-rc1")
-    await tick(hass, freezer, 30.1)
-
-    state = _state(hass)
-    assert state.state == STATE_OFF
-    assert state.attributes["latest_version"] == "2026.10.1 (marsrelay v2.0.0)"
-
-
-async def test_a_tag_changed_in_the_yaml_by_hand_leaves_the_installed_tag_unchanged(
-    hass: HomeAssistant,
-    builder: FakeDeviceBuilder,
-    marsrelay: GitRepo,
-    freezer: FrozenDateTimeFactory,
-) -> None:
-    marsrelay.tag("v1.4.0")
-    marsrelay.push()
-    marsrelay.tag("v1.5.0")
-    builder.files[CONFIGURATION] = _config_on_tag(marsrelay.url, "v1.4.0")
-    await set_up(hass, builder)
-
-    builder.files[CONFIGURATION] = _config_on_tag(marsrelay.url, "v1.5.0")
-    await tick(hass, freezer, 30.1)
-
-    state = _state(hass)
-    assert state.state == STATE_ON
-    assert state.attributes["installed_version"] == "2026.10.1 (marsrelay v1.4.0)"
-    assert state.attributes["release_summary"] == "marsrelay v1.4.0 → v1.5.0"
 
 
 async def test_the_composite_version_shows_tag_refs_by_version_and_branches_by_short_sha(
