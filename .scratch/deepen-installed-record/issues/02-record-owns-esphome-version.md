@@ -1,6 +1,6 @@
 # 02: The record owns the Installed ESPHome Version
 
-Status: ready-for-agent
+Status: resolved
 
 **What to build:** as specified in `../spec.md` under "Construction" and the ESPHome-version parts of "Interface", "The update entity" and "The setup code".
 
@@ -13,8 +13,8 @@ Status: ready-for-agent
 
 **Blocked by:** 01
 
-- [ ] New plain pytest record tests over in-memory storage:
+- [x] New plain pytest record tests over in-memory storage:
   - reported wins; an unparseable report falls back to the recorded version; with neither it is unknown and warns once, and warns again only after being known in between; without a Linked Device the recorded version is used;
   - seeds without a Linked Device; never seeds with one; never replaces a recorded version.
-- [ ] The existing HA tests for a Linked Device's version, seeding and the unknown warning still pass. They may still use `hass_storage` until ticket 03.
-- [ ] The full test suite passes, and `ruff` is clean.
+- [x] The existing HA tests for a Linked Device's version, seeding and the unknown warning still pass. They may still use `hass_storage` until ticket 03.
+- [x] The full test suite passes, and `ruff` is clean.
