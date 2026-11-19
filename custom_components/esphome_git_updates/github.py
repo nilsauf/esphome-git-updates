@@ -1,17 +1,22 @@
 """What GitHub's API knows of a repository: the commits between two shas, for release
-notes, and its releases.
+notes, and its releases. `GitHub` asks both by a Git Source's url.
 
 No Home Assistant imports: this asks GitHub's API, nothing more.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import aiohttp
+
+from .version_tags import is_version_tag
+
+_LOGGER = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
 
@@ -163,3 +168,69 @@ def _release(release: Any) -> Release:
         draft=bool(release["draft"]),
         prerelease=bool(release["prerelease"]),
     )
+
+
+# Pages of releases asked for at most, while each holds drafts and prereleases only.
+_MAX_PAGES = 5
+
+
+class GitHub:
+    """Asks GitHub about the repository of a Git Source, by its url.
+
+    It caches nothing: what to keep of GitHub's answers, and for how long, is
+    the caller's to decide.
+    """
+
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        token: Callable[[], str | None],
+        title: Callable[[], str],
+    ) -> None:
+        """*token* is read at each request, so a token set later reaches the next one;
+        *title* names the Tracked Config in the paging warning."""
+        self._session = session
+        self._token = token
+        self._title = title
+        # Repositories whose pages asked for held no Release, warned about once each.
+        self._unpaged: set[str] = set()
+
+    async def releases(self, url: str) -> tuple[Release, ...]:
+        """The Releases of the repository at *url*, newest first: empty when it has none
+        or is not on GitHub. Raises GitHubError if GitHub cannot be asked.
+
+        The first page of 100 is enough unless it holds drafts and prereleases
+        only; then the next is asked for, up to _MAX_PAGES, which keeps a
+        repository full of nightly prereleases from eating the rate limit.
+        """
+        if (repo := github_repo(url)) is None:
+            return ()
+        for page in range(1, _MAX_PAGES + 1):
+            listed = await releases(self._session, repo, self._token(), page)
+            found = tuple(release for release in listed if _is_release(release))
+            if found or len(listed) < RELEASES_PER_PAGE:
+                self._unpaged.discard(url)
+                return found
+        if url in self._unpaged:
+            return ()
+        self._unpaged.add(url)
+        _LOGGER.warning(
+            "%s: GitHub's %d newest releases of %s are all drafts or prereleases; "
+            "following its Version Tags",
+            self._title(),
+            _MAX_PAGES * RELEASES_PER_PAGE,
+            url,
+        )
+        return ()
+
+    async def compare(self, url: str, base: str, head: str) -> Comparison | None:
+        """The commits of the repository at *url* after *base* up to *head*: None, without
+        a request, when it is not on GitHub. Raises GitHubError if GitHub cannot be asked."""
+        if (repo := github_repo(url)) is None:
+            return None
+        return await compare(self._session, repo, base, head, self._token())
+
+
+def _is_release(release: Release) -> bool:
+    """A Release is neither a draft nor a prerelease, and its tag is a Version Tag."""
+    return not release.draft and not release.prerelease and is_version_tag(release.tag)
