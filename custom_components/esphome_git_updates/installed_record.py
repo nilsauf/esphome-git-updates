@@ -3,8 +3,7 @@ last successful Install, the seeds that stand in for it until then, and the Inst
 still running (ADR-0002, ADR-0003, ADR-0007).
 
 No Home Assistant imports: the storage is a port handed in. Home Assistant's
-`Store`, built with `STORAGE_VERSION` and `storage_key`, is the production
-adapter.
+`Store`, built by the integration's `record_store`, is the production adapter.
 """
 
 from __future__ import annotations
@@ -75,15 +74,15 @@ class Storage(Protocol):
 class Seeds(NamedTuple):
     """What new entries of one kind start from, by key, and every key still present."""
 
-    seeds: Mapping[str, str]
+    new: Mapping[str, str]
     present: Collection[str]
 
 
 def _seeded(recorded: Mapping[str, str], seeds: Seeds) -> dict[str, str]:
-    """*recorded* without the keys no longer present, and with *seeds* where nothing
-    is recorded yet."""
+    """*recorded* without the keys no longer present, and with the new ones of *seeds* where
+    nothing is recorded yet."""
     kept = {key: value for key, value in recorded.items() if key in seeds.present}
-    for key, value in seeds.seeds.items():
+    for key, value in seeds.new.items():
         kept.setdefault(key, value)
     return kept
 
@@ -107,12 +106,17 @@ class InstalledRecord:
     def installed_esphome_version(self, sw_version: str | None) -> str | None:
         """The Installed ESPHome Version, given the Linked Device's raw *sw_version*
         (None without one): what it reports, else what the last Install recorded
-        (ADR-0003). While neither gives one, no update shows: warned about once, and
-        again only after a version was known in between."""
-        version = parse_sw_version(sw_version) or self._data.get("installed_esphome_version")
-        if version is not None:
+        (ADR-0003). None while neither gives one, so no update shows."""
+        return parse_sw_version(sw_version) or self._data.get("installed_esphome_version")
+
+    def warn_if_esphome_version_unknown(self, sw_version: str | None) -> None:
+        """Warn while the Installed ESPHome Version, given the Linked Device's raw
+        *sw_version*, is unknown: once, and again only after a version was known in
+        between."""
+        if self.installed_esphome_version(sw_version) is not None:
             self._warned_unknown = False
-        elif not self._warned_unknown:
+            return
+        if not self._warned_unknown:
             _LOGGER.warning(
                 "%s: the installed ESPHome version is unknown, so no update is shown: "
                 "its Linked Device reports sw_version %r, and no Install has succeeded yet",
@@ -120,7 +124,6 @@ class InstalledRecord:
                 sw_version,
             )
             self._warned_unknown = True
-        return version
 
     async def async_seed_esphome_version(self, available: str) -> None:
         """Seed the Installed ESPHome Version with the *available* one: a new entry
@@ -144,15 +147,17 @@ class InstalledRecord:
         """Seed Installed Commits (by Source key) and Installed Tags (by repository URL)
         where none is recorded yet, and forget those no longer present, so a Source
         that comes back is seeded afresh (ADR-0003). Saves once, if anything changed."""
+        changed = False
         recorded_commits = self._data.get("installed_commits", {})
+        if (seeded := _seeded(recorded_commits, commits)) != recorded_commits:
+            self._data["installed_commits"] = seeded
+            changed = True
         recorded_tags = self._data.get("installed_tags", {})
-        seeded_commits = _seeded(recorded_commits, commits)
-        seeded_tags = _seeded(recorded_tags, tags)
-        if seeded_commits == recorded_commits and seeded_tags == recorded_tags:
-            return
-        self._data["installed_commits"] = seeded_commits
-        self._data["installed_tags"] = seeded_tags
-        await self._storage.async_save(self._data)
+        if (seeded := _seeded(recorded_tags, tags)) != recorded_tags:
+            self._data["installed_tags"] = seeded
+            changed = True
+        if changed:
+            await self._storage.async_save(self._data)
 
     @property
     def active_install(self) -> ActiveInstall | None:

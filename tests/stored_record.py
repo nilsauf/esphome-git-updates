@@ -9,20 +9,14 @@ the integration saved.
 from __future__ import annotations
 
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.storage import Store
 
-from custom_components.esphome_git_updates.installed_record import (
-    STORAGE_VERSION,
-    InstalledRecord,
-    StoredData,
-    storage_key,
-)
+from custom_components.esphome_git_updates import record_store
+from custom_components.esphome_git_updates.installed_record import InstalledRecord
 
 
 async def stored_record(hass: HomeAssistant, entry_id: str) -> InstalledRecord:
     """The Installed Record of the entry *entry_id*, loaded from Home Assistant's store."""
-    store: Store[StoredData] = Store(hass, STORAGE_VERSION, storage_key(entry_id))
-    record = InstalledRecord(store, linked_device=False, title=entry_id)
+    record = InstalledRecord(record_store(hass, entry_id), linked_device=False, title=entry_id)
     await record.async_load()
     return record
 

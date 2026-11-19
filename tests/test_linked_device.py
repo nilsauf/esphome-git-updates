@@ -162,3 +162,39 @@ async def test_a_linked_device_that_is_gone_is_still_never_seeded_for(
     assert len(dr.async_entries_for_config_entry(device_registry, entry.entry_id)) == 1
     assert _installed(hass) == (STATE_UNKNOWN, None)
     assert await recorded_esphome_version(hass, "tracked") is None
+
+
+async def test_an_unknown_version_is_not_warned_about_once_the_linked_device_is_gone(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    device_registry: dr.DeviceRegistry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    device = _esphome_device(hass, None)
+    device_registry.async_remove_device(device.id)
+
+    with caplog.at_level(logging.WARNING):
+        await _set_up(hass, builder, device)
+        # Reading the state asks for the Installed ESPHome Version again.
+        assert _installed(hass) == (STATE_UNKNOWN, None)
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert not any("ESPHome version" in w for w in warnings)
+
+
+async def test_a_new_sw_version_that_gives_no_version_is_warned_about(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    device_registry: dr.DeviceRegistry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    device = _esphome_device(hass, "1.4.0 (ESPHome 2026.10.0)")
+    await _set_up(hass, builder, device)
+
+    with caplog.at_level(logging.WARNING):
+        device_registry.async_update_device(device.id, sw_version="custom firmware")
+        await hass.async_block_till_done()
+
+    assert _installed(hass) == (STATE_UNKNOWN, None)
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("custom firmware" in w and "ESPHome version" in w for w in warnings)

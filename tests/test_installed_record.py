@@ -50,17 +50,36 @@ def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
 
 
-async def test_an_unknown_version_is_warned_about_once(caplog: pytest.LogCaptureFixture) -> None:
+async def test_reading_an_unknown_version_never_warns(caplog: pytest.LogCaptureFixture) -> None:
     record = await loaded(InMemoryStorage(), linked_device=True)
 
     with caplog.at_level(logging.WARNING):
         assert record.installed_esphome_version("custom firmware") is None
         assert record.installed_esphome_version(None) is None
 
+    assert _warnings(caplog) == []
+
+
+async def test_an_unknown_version_is_warned_about_once(caplog: pytest.LogCaptureFixture) -> None:
+    record = await loaded(InMemoryStorage(), linked_device=True)
+
+    with caplog.at_level(logging.WARNING):
+        record.warn_if_esphome_version_unknown("custom firmware")
+        record.warn_if_esphome_version_unknown(None)
+
     [warning] = _warnings(caplog)
     assert "host-node" in warning
     assert "ESPHome version" in warning
     assert "custom firmware" in warning
+
+
+async def test_a_known_version_is_not_warned_about(caplog: pytest.LogCaptureFixture) -> None:
+    record = await loaded(InMemoryStorage(), linked_device=True)
+
+    with caplog.at_level(logging.WARNING):
+        record.warn_if_esphome_version_unknown("2026.10.0 (config hash 0x1a2b3c4d)")
+
+    assert _warnings(caplog) == []
 
 
 async def test_it_is_warned_about_again_only_after_being_known_in_between(
@@ -69,9 +88,9 @@ async def test_it_is_warned_about_again_only_after_being_known_in_between(
     record = await loaded(InMemoryStorage(), linked_device=True)
 
     with caplog.at_level(logging.WARNING):
-        record.installed_esphome_version(None)
-        assert record.installed_esphome_version("2026.10.0 (config hash 0x1a2b3c4d)")
-        record.installed_esphome_version(None)
+        record.warn_if_esphome_version_unknown(None)
+        record.warn_if_esphome_version_unknown("2026.10.0 (config hash 0x1a2b3c4d)")
+        record.warn_if_esphome_version_unknown(None)
 
     assert len(_warnings(caplog)) == 2
 

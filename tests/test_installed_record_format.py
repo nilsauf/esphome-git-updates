@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.esphome_git_updates.device_builder import OTA, ActiveJob, Stage
 from custom_components.esphome_git_updates.install import ActiveInstall, InstallPlan
+from custom_components.esphome_git_updates.installed_record import Seeds
 from stored_record import stored_record
 
 # Written by an older version of the integration: its running Install has no upload
@@ -70,4 +71,17 @@ async def test_a_stored_record_reads_as_before_and_saves_the_same_layout(
                 "tags": {"https://github.com/example/lunarlink": "v1.3.0"},
             },
         },
+    }
+
+
+async def test_seeding_saves_only_the_kind_that_changed(
+    hass: HomeAssistant, hass_storage: dict[str, Any]
+) -> None:
+    record = await stored_record(hass, "tracked")
+
+    source = "https://github.com/example/marsrelay@HEAD"
+    await record.async_seed(Seeds({source: "c0ffee1"}, {source}), Seeds({}, ()))
+
+    assert hass_storage["esphome_git_updates.tracked"]["data"] == {
+        "installed_commits": {source: "c0ffee1"},
     }

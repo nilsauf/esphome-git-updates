@@ -88,14 +88,15 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
                     self.hass, self._linked.device_id, self._linked_device_updated
                 )
             )
-            # Asked now so an unknown version is warned about without waiting for a read.
-            self._installed_esphome()
+            self._record.warn_if_esphome_version_unknown(self._linked.sw_version)
         if (active := self._record.active_install) is not None:
             self._reattach(active)
 
     @callback
     def _linked_device_updated(self, event: Event[EventDeviceRegistryUpdatedData]) -> None:
         if event.data["action"] == "update" and "sw_version" in event.data["changes"]:
+            if self._linked is not None:
+                self._record.warn_if_esphome_version_unknown(self._linked.sw_version)
             self.async_write_ha_state()
 
     def _installed_esphome(self) -> str | None:

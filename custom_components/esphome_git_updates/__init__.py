@@ -22,7 +22,9 @@ PLATFORMS = [Platform.UPDATE]
 async def async_setup_entry(hass: HomeAssistant, entry: EsphomeGitUpdatesConfigEntry) -> bool:
     """Set up one Tracked Config."""
     record = InstalledRecord(
-        _storage(hass, entry), linked_device=CONF_DEVICE_ID in entry.data, title=entry.title
+        record_store(hass, entry.entry_id),
+        linked_device=CONF_DEVICE_ID in entry.data,
+        title=entry.title,
     )
     await record.async_load()
     session = DeviceBuilderSession(hass, entry)
@@ -59,9 +61,9 @@ async def async_remove_entry(hass: HomeAssistant, entry: EsphomeGitUpdatesConfig
     """Forget a removed Tracked Config: its stored versions and its Repair issues."""
     for issue_id in (protocol_issue_id, missing_ota_issue_id, refresh_policy_issue_id):
         ir.async_delete_issue(hass, DOMAIN, issue_id(entry.entry_id))
-    await _storage(hass, entry).async_remove()
+    await record_store(hass, entry.entry_id).async_remove()
 
 
-def _storage(hass: HomeAssistant, entry: EsphomeGitUpdatesConfigEntry) -> Store[StoredData]:
-    """Where the Installed Record of *entry* is kept."""
-    return Store(hass, STORAGE_VERSION, storage_key(entry.entry_id))
+def record_store(hass: HomeAssistant, entry_id: str) -> Store[StoredData]:
+    """Where the Installed Record of the config entry *entry_id* is kept."""
+    return Store(hass, STORAGE_VERSION, storage_key(entry_id))

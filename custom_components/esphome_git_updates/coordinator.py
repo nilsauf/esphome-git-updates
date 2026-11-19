@@ -1,4 +1,5 @@
-"""Read the Available ESPHome Version from the Device Builder, and hold what a set-up entry runs."""
+"""The version coordinator, which polls the Device Builder for the Available ESPHome
+Version, and the runtime data a set-up entry holds."""
 
 from __future__ import annotations
 
