@@ -11,8 +11,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from .versions import parse_sw_version
-
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -47,11 +45,6 @@ class LinkedDevice:
         """The firmware version the device reports in the registry."""
         device = self.device_entry
         return device.sw_version if isinstance(device, dr.DeviceEntry) else None
-
-    @property
-    def esphome_version(self) -> str | None:
-        """The ESPHome version in the device's `sw_version`, if it can be parsed."""
-        return parse_sw_version(self.sw_version)
 
     def is_offline(self, own_entity_id: str | None) -> bool:
         """Whether every entity the device has, other than *own_entity_id*, is unavailable.

@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
+import pytest
+
 from custom_components.esphome_git_updates.device_builder import ActiveJob, Stage
 from custom_components.esphome_git_updates.install import ActiveInstall, InstallPlan
 from custom_components.esphome_git_updates.installed_record import InstalledRecord, Seeds
@@ -10,10 +14,100 @@ from in_memory_storage import InMemoryStorage
 NONE = Seeds({}, ())
 
 
-async def loaded(storage: InMemoryStorage) -> InstalledRecord:
-    record = InstalledRecord(storage)
+async def loaded(storage: InMemoryStorage, *, linked_device: bool = False) -> InstalledRecord:
+    record = InstalledRecord(storage, linked_device=linked_device, title="host-node")
     await record.async_load()
     return record
+
+
+# The Installed ESPHome Version.
+
+
+async def test_the_version_the_linked_device_reports_wins() -> None:
+    storage = InMemoryStorage()
+    await (await loaded(storage)).async_record_install("2026.10.1", {}, {})
+    record = await loaded(storage, linked_device=True)
+
+    assert record.installed_esphome_version("2026.10.0 (Oct 31 2026, 12:34:56)") == "2026.10.0"
+
+
+async def test_an_unparseable_report_falls_back_to_the_recorded_version() -> None:
+    storage = InMemoryStorage()
+    await (await loaded(storage)).async_record_install("2026.10.0", {}, {})
+    record = await loaded(storage, linked_device=True)
+
+    assert record.installed_esphome_version("custom firmware") == "2026.10.0"
+
+
+async def test_without_a_linked_device_the_recorded_version_is_used() -> None:
+    record = await loaded(InMemoryStorage())
+    await record.async_record_install("2026.10.0", {}, {})
+
+    assert record.installed_esphome_version(None) == "2026.10.0"
+
+
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+
+
+async def test_an_unknown_version_is_warned_about_once(caplog: pytest.LogCaptureFixture) -> None:
+    record = await loaded(InMemoryStorage(), linked_device=True)
+
+    with caplog.at_level(logging.WARNING):
+        assert record.installed_esphome_version("custom firmware") is None
+        assert record.installed_esphome_version(None) is None
+
+    [warning] = _warnings(caplog)
+    assert "host-node" in warning
+    assert "ESPHome version" in warning
+    assert "custom firmware" in warning
+
+
+async def test_it_is_warned_about_again_only_after_being_known_in_between(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    record = await loaded(InMemoryStorage(), linked_device=True)
+
+    with caplog.at_level(logging.WARNING):
+        record.installed_esphome_version(None)
+        assert record.installed_esphome_version("2026.10.0 (config hash 0x1a2b3c4d)")
+        record.installed_esphome_version(None)
+
+    assert len(_warnings(caplog)) == 2
+
+
+# Seeding the Installed ESPHome Version.
+
+
+async def test_without_a_linked_device_the_available_version_is_seeded() -> None:
+    storage = InMemoryStorage()
+    record = await loaded(storage)
+
+    await record.async_seed_esphome_version("2026.10.1")
+
+    assert record.installed_esphome_version(None) == "2026.10.1"
+    assert (await loaded(storage)).installed_esphome_version(None) == "2026.10.1"
+
+
+async def test_with_a_linked_device_the_version_is_never_seeded() -> None:
+    storage = InMemoryStorage()
+    record = await loaded(storage, linked_device=True)
+
+    await record.async_seed_esphome_version("2026.10.1")
+
+    assert record.installed_esphome_version(None) is None
+    assert storage.saves == 0
+
+
+async def test_seeding_never_replaces_a_recorded_version() -> None:
+    storage = InMemoryStorage()
+    await (await loaded(storage)).async_record_install("2026.10.0", {}, {})
+    record = await loaded(storage)
+
+    await record.async_seed_esphome_version("2026.10.1")
+
+    assert record.installed_esphome_version(None) == "2026.10.0"
+    assert (await loaded(storage)).installed_esphome_version(None) == "2026.10.0"
 
 
 # Seeding Installed Commits and Installed Tags.
@@ -97,7 +191,7 @@ async def test_recording_an_install_merges_the_versions_and_ends_the_active_inst
     await record.async_record_install("2025.6.0", {"a": "c2"}, {"u": "v2"})
 
     for each in (record, await loaded(storage)):
-        assert each.installed_esphome_version == "2025.6.0"
+        assert each.installed_esphome_version(None) == "2025.6.0"
         assert each.installed_commit("a") == "c2"
         assert each.installed_commit("b") == "s1"
         assert each.installed_tag("u") == "v2"

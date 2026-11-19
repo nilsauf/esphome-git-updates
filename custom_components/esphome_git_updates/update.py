@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -28,8 +27,6 @@ from .installed_record import InstalledRecord
 from .linked_device import LinkedDevice
 from .options import Options
 from .versions import Versions
-
-_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -71,8 +68,6 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
             entry.runtime_data.session,
             self._record,
         )
-        # Whether the unknown Installed ESPHome Version has been warned about.
-        self._warned_unknown = False
         self._attr_unique_id = entry.entry_id
         if self._linked is not None:
             # Set explicitly: HA no longer merges devices across config entries.
@@ -93,34 +88,20 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
                     self.hass, self._linked.device_id, self._linked_device_updated
                 )
             )
-            self._warn_if_installed_unknown()
+            # Asked now so an unknown version is warned about without waiting for a read.
+            self._installed_esphome()
         if (active := self._record.active_install) is not None:
             self._reattach(active)
 
     @callback
     def _linked_device_updated(self, event: Event[EventDeviceRegistryUpdatedData]) -> None:
         if event.data["action"] == "update" and "sw_version" in event.data["changes"]:
-            self._warn_if_installed_unknown()
             self.async_write_ha_state()
 
     def _installed_esphome(self) -> str | None:
-        """What the Linked Device reports, else what the last Install recorded (ADR-0003)."""
-        reported = self._linked.esphome_version if self._linked is not None else None
-        return reported or self._record.installed_esphome_version
-
-    def _warn_if_installed_unknown(self) -> None:
-        """Warn once while the Installed ESPHome Version is unknown, so no update shows."""
-        if self._installed_esphome() is not None:
-            self._warned_unknown = False
-            return
-        if not self._warned_unknown:
-            _LOGGER.warning(
-                "%s: the installed ESPHome version is unknown, so no update is shown: "
-                "its Linked Device reports sw_version %r, and no Install has succeeded yet",
-                self._entry.title,
-                self._linked.sw_version if self._linked is not None else None,
-            )
-            self._warned_unknown = True
+        return self._record.installed_esphome_version(
+            self._linked.sw_version if self._linked is not None else None
+        )
 
     @property
     def installed_version(self) -> str | None:

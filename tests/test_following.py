@@ -134,7 +134,7 @@ class InMemoryTrackedConfig:
     def __init__(self) -> None:
         self.remote = InMemoryRemotes()
         self.github = InMemoryGitHub()
-        self.record = InstalledRecord(InMemoryStorage())
+        self.record = InstalledRecord(InMemoryStorage(), linked_device=False, title="node")
         self.followed = FollowedSources(self.remote, self.github, self.record, lambda: "node")
         self.yaml = ""
 

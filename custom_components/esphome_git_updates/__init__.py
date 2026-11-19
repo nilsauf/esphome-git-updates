@@ -21,17 +21,14 @@ PLATFORMS = [Platform.UPDATE]
 
 async def async_setup_entry(hass: HomeAssistant, entry: EsphomeGitUpdatesConfigEntry) -> bool:
     """Set up one Tracked Config."""
-    record = InstalledRecord(_storage(hass, entry))
+    record = InstalledRecord(
+        _storage(hass, entry), linked_device=CONF_DEVICE_ID in entry.data, title=entry.title
+    )
     await record.async_load()
     session = DeviceBuilderSession(hass, entry)
     coordinator = EsphomeVersionCoordinator(hass, entry, session)
     await coordinator.async_config_entry_first_refresh()
-    if CONF_DEVICE_ID not in entry.data and record.installed_esphome_version is None:
-        # Seeding: a new entry assumes the device already runs the Available
-        # ESPHome Version, so it shows no update until the Device Builder's
-        # ESPHome changes. An entry with a Linked Device is never seeded, even
-        # when that device has since gone (ADR-0003).
-        await record.async_set_installed_esphome_version(coordinator.data)
+    await record.async_seed_esphome_version(coordinator.data)
     linked_device = LinkedDevice.of(hass, entry)
     git_coordinator = GitSourcesCoordinator(hass, entry, record, session)
     # Not a first refresh: Git Sources that cannot be read must not hold up

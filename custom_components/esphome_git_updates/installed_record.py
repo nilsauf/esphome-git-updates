@@ -9,12 +9,16 @@ adapter.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Collection, Mapping
 from typing import NamedTuple, NotRequired, Protocol, TypedDict
 
 from .const import DOMAIN
 from .device_builder import OTA, ActiveJob, Stage
 from .install import ActiveInstall, InstallPlan
+from .versions import parse_sw_version
+
+_LOGGER = logging.getLogger(__name__)
 
 STORAGE_VERSION = 1
 
@@ -87,20 +91,45 @@ def _seeded(recorded: Mapping[str, str], seeds: Seeds) -> dict[str, str]:
 class InstalledRecord:
     """What the integration remembers about one Tracked Config (ADR-0003)."""
 
-    def __init__(self, storage: Storage) -> None:
+    def __init__(self, storage: Storage, *, linked_device: bool, title: str) -> None:
+        """*linked_device*: whether the entry has a Linked Device, even one since gone.
+        *title*: the entry's title, for the log."""
         self._storage = storage
+        self._linked_device = linked_device
+        self._title = title
         self._data: StoredData = {}
+        # Whether the unknown Installed ESPHome Version has been warned about.
+        self._warned_unknown = False
 
     async def async_load(self) -> None:
         self._data = await self._storage.async_load() or {}
 
-    @property
-    def installed_esphome_version(self) -> str | None:
-        """The ESPHome version recorded for the Tracked Config, if any."""
-        return self._data.get("installed_esphome_version")
+    def installed_esphome_version(self, sw_version: str | None) -> str | None:
+        """The Installed ESPHome Version, given the Linked Device's raw *sw_version*
+        (None without one): what it reports, else what the last Install recorded
+        (ADR-0003). While neither gives one, no update shows: warned about once, and
+        again only after a version was known in between."""
+        version = parse_sw_version(sw_version) or self._data.get("installed_esphome_version")
+        if version is not None:
+            self._warned_unknown = False
+        elif not self._warned_unknown:
+            _LOGGER.warning(
+                "%s: the installed ESPHome version is unknown, so no update is shown: "
+                "its Linked Device reports sw_version %r, and no Install has succeeded yet",
+                self._title,
+                sw_version,
+            )
+            self._warned_unknown = True
+        return version
 
-    async def async_set_installed_esphome_version(self, version: str) -> None:
-        self._data["installed_esphome_version"] = version
+    async def async_seed_esphome_version(self, available: str) -> None:
+        """Seed the Installed ESPHome Version with the *available* one: a new entry
+        assumes the device already runs it, so it shows no update until the Device
+        Builder's ESPHome changes. An entry with a Linked Device is never seeded, even
+        when that device has since gone, and a recorded version is kept (ADR-0003)."""
+        if self._linked_device or "installed_esphome_version" in self._data:
+            return
+        self._data["installed_esphome_version"] = available
         await self._storage.async_save(self._data)
 
     def installed_commit(self, source_key: str) -> str | None:
