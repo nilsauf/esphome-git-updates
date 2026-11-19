@@ -1,6 +1,6 @@
 # 01: A Snapshot decides an Install
 
-Status: ready-for-agent
+Status: resolved
 
 **What to build:** as specified in `../spec.md` under "`Snapshot` decides an Install".
 

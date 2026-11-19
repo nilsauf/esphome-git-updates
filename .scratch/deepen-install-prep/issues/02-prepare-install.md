@@ -1,6 +1,6 @@
 # 02: The poller prepares an Install; the entity is guard → prepare → run
 
-Status: ready-for-agent
+Status: resolved
 
 **What to build:** as specified in `../spec.md` under "The git poller prepares an Install" and "The update entity".
 

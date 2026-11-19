@@ -1,6 +1,6 @@
 # Prepare an Install in one step: spec
 
-Status: ready-for-agent
+Status: resolved
 
 Terms are defined in `GLOSSARY.md`. Relevant decisions: ADR-0003 (record what was shown when Install was pressed), ADR-0004 (Refresh Policy, exemption for Sources following versions), ADR-0006 (raw YAML over `/ws`), ADR-0007 (an Install rewrites Tag Refs).
 

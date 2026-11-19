@@ -1,6 +1,6 @@
 # 03: Delete the HA versions of the refusal-rule tests
 
-Status: ready-for-agent
+Status: resolved
 
 **What to build:** as specified in `../spec.md` under "Testing Decisions". The unit tests from 01 now cover the OTA and Refresh Policy rules. Remove their HA duplicates from `tests/test_pre_install_checks.py`, and keep the HA tests that need HA.
 
