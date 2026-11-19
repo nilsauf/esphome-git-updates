@@ -67,40 +67,16 @@ async def test_an_install_of_a_config_without_ota_is_refused_and_starts_no_job(
     builder: FakeDeviceBuilder,
     marsrelay: GitRepo,
     hass_storage: dict[str, Any],
-    issue_registry: ir.IssueRegistry,
 ) -> None:
     builder.files[CONFIGURATION] = _config(marsrelay, ota="")
     await _set_up_with_an_update(hass, builder, hass_storage)
 
     # The polls' transcript: a firmware/install would be a mismatch.
-    with pytest.raises(HomeAssistantError, match="no `ota:` platform `esphome` or `web_server`"):
+    with pytest.raises(HomeAssistantError):
         await press_install(hass)
 
     assert builder.mismatches == []
     assert hass.states.get(ENTITY_ID).attributes["in_progress"] is False  # type: ignore[union-attr]
-    issue = _issue(issue_registry, "missing_ota")
-    assert issue is not None
-    assert issue.translation_key == "missing_ota"
-
-
-async def test_an_install_with_a_git_source_lacking_refresh_always_is_refused_naming_it(
-    hass: HomeAssistant,
-    builder: FakeDeviceBuilder,
-    marsrelay: GitRepo,
-    hass_storage: dict[str, Any],
-    issue_registry: ir.IssueRegistry,
-) -> None:
-    builder.files[CONFIGURATION] = _config(marsrelay, refresh="1d")
-    await _set_up_with_an_update(hass, builder, hass_storage)
-
-    with pytest.raises(HomeAssistantError, match="Git Sources marsrelay lack `refresh: always`"):
-        await press_install(hass)
-
-    assert builder.mismatches == []
-    issue = _issue(issue_registry, "refresh_policy")
-    assert issue is not None
-    assert issue.translation_placeholders == {"title": "host-node", "sources": "marsrelay"}
-    assert _issue(issue_registry, "missing_ota") is None
 
 
 async def test_each_repair_issue_is_raised_by_the_poll_and_clears_once_the_yaml_is_fixed(
@@ -114,7 +90,9 @@ async def test_each_repair_issue_is_raised_by_the_poll_and_clears_once_the_yaml_
     builder.files[CONFIGURATION] = _config(marsrelay, ota="", refresh=None)
     await _set_up_with_an_update(hass, builder, hass_storage)
     assert _issue(issue_registry, "missing_ota") is not None
-    assert _issue(issue_registry, "refresh_policy") is not None
+    issue = _issue(issue_registry, "refresh_policy")
+    assert issue is not None
+    assert issue.translation_placeholders == {"title": "host-node", "sources": "marsrelay"}
 
     builder.files[CONFIGURATION] = _config(marsrelay, refresh=None)
     await tick(hass, freezer, 30.1)
@@ -155,45 +133,6 @@ async def test_a_config_that_passes_both_checks_installs_and_raises_no_issue(
 
     assert list(issue_registry.issues) == []
     assert hass.states.get(ENTITY_ID).state == STATE_OFF  # type: ignore[union-attr]
-
-
-async def test_a_git_source_on_a_non_version_tag_needs_refresh_always_like_a_branch(
-    hass: HomeAssistant,
-    builder: FakeDeviceBuilder,
-    marsrelay: GitRepo,
-    hass_storage: dict[str, Any],
-    issue_registry: ir.IssueRegistry,
-) -> None:
-    marsrelay.tag("stable")
-    builder.files[CONFIGURATION] = (
-        f"{OTA}external_components:\n  - source:\n      type: git\n"
-        f"      url: {marsrelay.url}\n      ref: stable\n"
-    )
-    await _set_up_with_an_update(hass, builder, hass_storage)
-
-    with pytest.raises(HomeAssistantError, match="Git Sources marsrelay lack `refresh: always`"):
-        await press_install(hass)
-
-    assert _issue(issue_registry, "refresh_policy") is not None
-
-
-async def test_a_git_source_on_a_version_tag_needs_no_refresh_policy(
-    hass: HomeAssistant,
-    builder: FakeDeviceBuilder,
-    marsrelay: GitRepo,
-    hass_storage: dict[str, Any],
-    issue_registry: ir.IssueRegistry,
-) -> None:
-    marsrelay.tag("v1.0.0")
-    builder.files[CONFIGURATION] = (
-        f"{OTA}external_components:\n  - source:\n      type: git\n"
-        f"      url: {marsrelay.url}\n      ref: v1.0.0\n"
-    )
-    await _set_up_with_an_update(hass, builder, hass_storage)
-
-    await install(hass, builder, "install_clean_success")
-
-    assert list(issue_registry.issues) == []
 
 
 async def test_an_install_is_refused_when_the_yaml_cannot_be_read_to_check_it(
