@@ -52,9 +52,7 @@ class FakeConnect:
     errors: list[BaseException] = field(default_factory=list)
     calls: list[bool] = field(default_factory=list)
 
-    def __call__(
-        self, *, long_running: bool
-    ) -> AbstractAsyncContextManager[DeviceBuilderClient]:
+    def __call__(self, *, long_running: bool) -> AbstractAsyncContextManager[DeviceBuilderClient]:
         self.calls.append(long_running)
         return self._connect()
 
@@ -204,7 +202,9 @@ async def test_a_device_builder_that_cannot_be_reached_is_unavailable_and_not_a_
 ) -> None:
     session, _ = _session(hass, FakeConnect([error]))
 
-    with pytest.raises(DeviceBuilderUnavailable, match="^cannot reach the Device Builder: ") as info:
+    with pytest.raises(
+        DeviceBuilderUnavailable, match="^cannot reach the Device Builder: "
+    ) as info:
         async with session.connect("version"):
             pass
 

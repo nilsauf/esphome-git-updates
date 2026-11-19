@@ -107,9 +107,7 @@ async def test_install_rewrites_an_included_file_and_a_single_use_substitution(
     state = hass.states.get(ENTITY_ID)
     assert state is not None
     assert state.state == STATE_OFF
-    assert state.attributes["installed_version"] == (
-        "2026.10.1 (marsrelay v1.5.0, sensors v2.1)"
-    )
+    assert state.attributes["installed_version"] == ("2026.10.1 (marsrelay v1.5.0, sensors v2.1)")
 
 
 async def test_install_rewrites_a_tag_ref_in_every_place_it_is_written(

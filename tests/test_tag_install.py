@@ -189,9 +189,7 @@ async def test_one_install_moves_a_tag_ref_and_records_a_branch_source_too(
     freezer: FrozenDateTimeFactory,
 ) -> None:
     sensors = GitRepo(tmp_path / "sensors")
-    branch_source = (
-        f"  - source:\n      type: git\n      url: {sensors.url}\n    refresh: always\n"
-    )
+    branch_source = f"  - source:\n      type: git\n      url: {sensors.url}\n    refresh: always\n"
     builder.files[CONFIGURATION] = _config(marsrelay.url, "v1.4.0") + branch_source
     await set_up(hass, builder)
     pushed = sensors.push()

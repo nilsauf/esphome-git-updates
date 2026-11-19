@@ -157,7 +157,15 @@ def test_the_esphome_version_is_parsed_from_sw_version(
 
 @pytest.mark.parametrize(
     "sw_version",
-    [None, "", "unknown", "1.4.0", "firmware (2026.10.1)", "1.4.0 (ESPHome )", "(ESPHome 2026.10.1)"],
+    [
+        None,
+        "",
+        "unknown",
+        "1.4.0",
+        "firmware (2026.10.1)",
+        "1.4.0 (ESPHome )",
+        "(ESPHome 2026.10.1)",
+    ],
 )
 def test_a_sw_version_that_names_no_esphome_version_is_not_parsed(sw_version: str | None) -> None:
     assert parse_sw_version(sw_version) is None

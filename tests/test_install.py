@@ -184,7 +184,9 @@ async def test_a_refused_install_command_fails_at_its_stage_and_clears_no_drift(
     assert run.session.clean_exits == []
 
 
-async def test_a_successful_install_records_the_version_and_the_commits_seen_when_it_started() -> None:
+async def test_a_successful_install_records_the_version_and_the_commits_seen_when_it_started() -> (
+    None
+):
     run = await _run(install_transcript("install_clean_success"))
 
     assert run.fake.finished and run.fake.mismatches == []
@@ -197,7 +199,9 @@ async def test_a_successful_install_records_the_version_and_the_commits_seen_whe
     assert run.session.clean_exits == ["install"]
 
 
-async def test_a_failed_compile_fails_at_compile_with_the_log_tail_and_exits_the_session_cleanly() -> None:
+async def test_a_failed_compile_fails_at_compile_with_the_log_tail_and_exits_the_session_cleanly() -> (
+    None
+):
     run = await _run(install_transcript("install_compile_failed"))
 
     assert isinstance(run.ending, Failed)
@@ -250,7 +254,9 @@ async def test_an_upload_that_fails_for_another_reason_is_not_called_unreachable
     assert "unreachable" not in run.ending.error
 
 
-async def test_a_connection_lost_mid_compile_fails_at_the_stage_reached_and_forgets_the_install() -> None:
+async def test_a_connection_lost_mid_compile_fails_at_the_stage_reached_and_forgets_the_install() -> (
+    None
+):
     transcript = install_transcript("install_compile_failed")
     lost_at = next(
         i

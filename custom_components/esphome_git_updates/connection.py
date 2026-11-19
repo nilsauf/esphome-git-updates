@@ -110,9 +110,7 @@ class ProtocolIssue:
         """Report, under *name*, that the Device Builder answered in a way this
         integration does not understand."""
         if isinstance(err, UnsupportedServerVersion):
-            self.report(
-                name, "unsupported_server_version", {"server_version": err.server_version}
-            )
+            self.report(name, "unsupported_server_version", {"server_version": err.server_version})
         else:
             self.report(name, "unexpected_frame", {"error": str(err)})
 
@@ -159,6 +157,7 @@ class DeviceBuilderSession:
     ) -> None:
         self._reauth = Reauthentication(hass, entry)
         self._issue = ProtocolIssue(hass, entry)
+
         def connect_to_entry(
             *, long_running: bool
         ) -> AbstractAsyncContextManager[DeviceBuilderClient]:

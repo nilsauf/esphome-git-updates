@@ -28,7 +28,9 @@ from typing import Any
 
 import aiohttp
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "custom_components" / "esphome_git_updates"))
+sys.path.insert(
+    0, str(Path(__file__).resolve().parents[1] / "custom_components" / "esphome_git_updates")
+)
 
 import device_builder
 

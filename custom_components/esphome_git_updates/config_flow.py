@@ -77,7 +77,9 @@ REAUTH_SCHEMA = probatio.Schema(
 OPTIONS_SCHEMA = probatio.Schema(
     {
         probatio.Required(CONF_CLEAN_BUILD, default=DEFAULT_CLEAN_BUILD): bool,
-        probatio.Required(CONF_GIT_POLL_INTERVAL, default=DEFAULT_GIT_POLL_INTERVAL): NumberSelector(
+        probatio.Required(
+            CONF_GIT_POLL_INTERVAL, default=DEFAULT_GIT_POLL_INTERVAL
+        ): NumberSelector(
             NumberSelectorConfig(
                 min=1, step=1, unit_of_measurement="min", mode=NumberSelectorMode.BOX
             )
@@ -180,7 +182,11 @@ class EsphomeGitUpdatesConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="configuration",
             data_schema=probatio.Schema(
-                {probatio.Required(CONF_CONFIGURATION): SelectSelector(SelectSelectorConfig(options=options))}
+                {
+                    probatio.Required(CONF_CONFIGURATION): SelectSelector(
+                        SelectSelectorConfig(options=options)
+                    )
+                }
             ),
         )
 

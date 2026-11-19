@@ -74,9 +74,7 @@ async def test_the_tag_part_of_the_github_shorthand_is_rewritten(written: str) -
 
     moved = await _moved("v1.10.0", main)
 
-    assert moved == {
-        "node.yaml": main.replace(written, written.replace("@v1.4.0", "@v1.10.0"))
-    }
+    assert moved == {"node.yaml": main.replace(written, written.replace("@v1.4.0", "@v1.10.0"))}
 
 
 async def test_the_ref_of_a_remote_package_is_rewritten() -> None:

@@ -70,19 +70,32 @@ async def test_a_connection_dropped_before_the_handshake_is_a_lost_connection() 
 
 
 def _device(configuration: str, name: str, friendly_name: str) -> dict[str, object]:
-    return {"name": name, "friendly_name": friendly_name, "configuration": configuration,
-            "target_platform": "esp32", "address": f"{name}.local"}
+    return {
+        "name": name,
+        "friendly_name": friendly_name,
+        "configuration": configuration,
+        "target_platform": "esp32",
+        "address": f"{name}.local",
+    }
 
 
 async def test_list_configurations_returns_configured_devices() -> None:
     transcript = [
         server_info(),
         {"dir": "out", "frame": {"command": "devices/list", "message_id": "1", "args": {}}},
-        {"dir": "in", "frame": {"message_id": "1", "result": {
-            "configured": [_device("b2500.yaml", "b2500", "Marstek B2500"),
-                           _device("kitchen.yaml", "kitchen", "Kitchen")],
-            "importable": [{"name": "stray"}],
-        }}},
+        {
+            "dir": "in",
+            "frame": {
+                "message_id": "1",
+                "result": {
+                    "configured": [
+                        _device("b2500.yaml", "b2500", "Marstek B2500"),
+                        _device("kitchen.yaml", "kitchen", "Kitchen"),
+                    ],
+                    "importable": [{"name": "stray"}],
+                },
+            },
+        },
     ]
     async with (
         serve(transcript) as (url, fake),
@@ -100,8 +113,14 @@ async def test_list_configurations_returns_configured_devices() -> None:
 async def test_get_config_returns_raw_yaml() -> None:
     transcript = [
         server_info(),
-        {"dir": "out", "frame": {"command": "devices/get_config", "message_id": "1",
-                                 "args": {"configuration": "b2500.yaml"}}},
+        {
+            "dir": "out",
+            "frame": {
+                "command": "devices/get_config",
+                "message_id": "1",
+                "args": {"configuration": "b2500.yaml"},
+            },
+        },
         {"dir": "in", "frame": {"message_id": "1", "result": "esphome:\n  name: b2500\n"}},
     ]
     async with (
@@ -115,10 +134,22 @@ async def test_get_config_returns_raw_yaml() -> None:
 async def test_a_command_error_raises_command_failed_with_the_server_code() -> None:
     transcript = [
         server_info(),
-        {"dir": "out", "frame": {"command": "devices/get_config", "message_id": "1",
-                                 "args": {"configuration": "nope.yaml"}}},
-        {"dir": "in", "frame": {"message_id": "1", "error_code": "not_found",
-                                "details": "Device 'nope.yaml' not found"}},
+        {
+            "dir": "out",
+            "frame": {
+                "command": "devices/get_config",
+                "message_id": "1",
+                "args": {"configuration": "nope.yaml"},
+            },
+        },
+        {
+            "dir": "in",
+            "frame": {
+                "message_id": "1",
+                "error_code": "not_found",
+                "details": "Device 'nope.yaml' not found",
+            },
+        },
     ]
     async with (
         serve(transcript) as (url, _),
@@ -134,10 +165,18 @@ async def test_a_command_error_raises_command_failed_with_the_server_code() -> N
 async def test_update_config_writes_the_yaml_if_it_is_still_as_expected() -> None:
     transcript = [
         server_info(),
-        {"dir": "out", "frame": {"command": "devices/update_config", "message_id": "1",
-                                 "args": {"configuration": "b2500.yaml",
-                                          "content": "ref: v1.5.0\n",
-                                          "expected": "ref: v1.4.0\n"}}},
+        {
+            "dir": "out",
+            "frame": {
+                "command": "devices/update_config",
+                "message_id": "1",
+                "args": {
+                    "configuration": "b2500.yaml",
+                    "content": "ref: v1.5.0\n",
+                    "expected": "ref: v1.4.0\n",
+                },
+            },
+        },
         {"dir": "in", "frame": {"message_id": "1", "result": None}},
     ]
     async with (
@@ -152,12 +191,26 @@ async def test_update_config_writes_the_yaml_if_it_is_still_as_expected() -> Non
 async def test_update_config_of_a_file_changed_meanwhile_raises_precondition_failed() -> None:
     transcript = [
         server_info(),
-        {"dir": "out", "frame": {"command": "devices/update_config", "message_id": "1",
-                                 "args": {"configuration": "b2500.yaml",
-                                          "content": "ref: v1.5.0\n",
-                                          "expected": "ref: v1.4.0\n"}}},
-        {"dir": "in", "frame": {"message_id": "1", "error_code": "precondition_failed",
-                                "details": "content changed"}},
+        {
+            "dir": "out",
+            "frame": {
+                "command": "devices/update_config",
+                "message_id": "1",
+                "args": {
+                    "configuration": "b2500.yaml",
+                    "content": "ref: v1.5.0\n",
+                    "expected": "ref: v1.4.0\n",
+                },
+            },
+        },
+        {
+            "dir": "in",
+            "frame": {
+                "message_id": "1",
+                "error_code": "precondition_failed",
+                "details": "content changed",
+            },
+        },
     ]
     async with (
         serve(transcript) as (url, _),
@@ -188,10 +241,17 @@ async def test_a_frame_for_another_message_raises_unexpected_frame() -> None:
 async def test_get_job_progress_returns_the_jobs_own_progress() -> None:
     transcript = [
         server_info(),
-        {"dir": "out", "frame": {"command": "firmware/get_job", "message_id": "1",
-                                 "args": {"job_id": "c1"}}},
-        {"dir": "in", "frame": {"message_id": "1", "result": {
-            "job_id": "c1", "status": "running", "progress": 42}}},
+        {
+            "dir": "out",
+            "frame": {"command": "firmware/get_job", "message_id": "1", "args": {"job_id": "c1"}},
+        },
+        {
+            "dir": "in",
+            "frame": {
+                "message_id": "1",
+                "result": {"job_id": "c1", "status": "running", "progress": 42},
+            },
+        },
     ]
     async with (
         serve(transcript) as (url, fake),
@@ -215,8 +275,10 @@ async def test_a_malformed_get_job_result_raises_unexpected_frame(
 ) -> None:
     transcript = [
         server_info(),
-        {"dir": "out", "frame": {"command": "firmware/get_job", "message_id": "1",
-                                 "args": {"job_id": "c1"}}},
+        {
+            "dir": "out",
+            "frame": {"command": "firmware/get_job", "message_id": "1", "args": {"job_id": "c1"}},
+        },
         {"dir": "in", "frame": {"message_id": "1", "result": result}},
     ]
     async with (
@@ -292,7 +354,9 @@ async def test_a_progress_callback_that_raises_never_fails_the_follow(raising: s
             aiohttp.ClientSession() as session,
             device_builder.connect(session, url) as client,
         ):
-            job = await client.follow_job("c1", device_builder.Stage.COMPILE, on_progress=on_progress)
+            job = await client.follow_job(
+                "c1", device_builder.Stage.COMPILE, on_progress=on_progress
+            )
 
     assert job.succeeded
     # Both updates were attempted, whichever one raised.
@@ -315,7 +379,9 @@ async def test_a_failed_job_does_not_fill_its_progress_band() -> None:
             aiohttp.ClientSession() as session,
             device_builder.connect(session, url) as client,
         ):
-            job = await client.follow_job("c1", device_builder.Stage.COMPILE, on_progress=on_progress)
+            job = await client.follow_job(
+                "c1", device_builder.Stage.COMPILE, on_progress=on_progress
+            )
 
     assert not job.succeeded
     # The failed job ends without the update that would fill its band.
@@ -355,8 +421,14 @@ async def test_a_dropped_connection_raises_connection_lost() -> None:
 
 
 def _login(username: str, password: str) -> dict[str, object]:
-    return {"dir": "out", "frame": {"command": "auth/login", "message_id": "1",
-                                    "args": {"username": username, "password": password}}}
+    return {
+        "dir": "out",
+        "frame": {
+            "command": "auth/login",
+            "message_id": "1",
+            "args": {"username": username, "password": password},
+        },
+    }
 
 
 async def test_connect_logs_in_when_the_server_requires_auth() -> None:
@@ -370,9 +442,7 @@ async def test_connect_logs_in_when_the_server_requires_auth() -> None:
     async with (
         serve(transcript) as (url, fake),
         aiohttp.ClientSession() as session,
-        device_builder.connect(
-                session, url, username="admin", password="secret"
-        ) as client,
+        device_builder.connect(session, url, username="admin", password="secret") as client,
     ):
         assert await client.list_configurations() == []
     assert fake.mismatches == []
@@ -387,9 +457,7 @@ async def test_connect_skips_login_when_the_server_does_not_require_auth() -> No
     async with (
         serve(transcript) as (url, fake),
         aiohttp.ClientSession() as session,
-        device_builder.connect(
-                session, url, username="admin", password="secret"
-        ) as client,
+        device_builder.connect(session, url, username="admin", password="secret") as client,
     ):
         await client.list_configurations()
     assert fake.mismatches == []
@@ -399,8 +467,14 @@ async def test_rejected_credentials_raise_authentication_failed() -> None:
     transcript = [
         server_info(requires_auth=True),
         _login("admin", "wrong"),
-        {"dir": "in", "frame": {"message_id": "1", "error_code": "not_authenticated",
-                                "details": "Invalid credentials"}},
+        {
+            "dir": "in",
+            "frame": {
+                "message_id": "1",
+                "error_code": "not_authenticated",
+                "details": "Invalid credentials",
+            },
+        },
     ]
     async with serve(transcript) as (url, _), aiohttp.ClientSession() as session:
         with pytest.raises(device_builder.AuthenticationFailed, match="Invalid credentials"):
@@ -421,8 +495,14 @@ async def test_missing_credentials_raise_authentication_failed() -> None:
 async def test_a_recorder_captures_a_transcript_the_fake_server_can_replay() -> None:
     transcript = [
         server_info(),
-        {"dir": "out", "frame": {"command": "devices/get_config", "message_id": "1",
-                                 "args": {"configuration": "b2500.yaml"}}},
+        {
+            "dir": "out",
+            "frame": {
+                "command": "devices/get_config",
+                "message_id": "1",
+                "args": {"configuration": "b2500.yaml"},
+            },
+        },
         {"dir": "in", "frame": {"message_id": "1", "result": "esphome:\n  name: b2500\n"}},
     ]
     recorded: list[dict[str, object]] = []
@@ -430,7 +510,7 @@ async def test_a_recorder_captures_a_transcript_the_fake_server_can_replay() -> 
         serve(transcript) as (url, _),
         aiohttp.ClientSession() as session,
         device_builder.connect(
-                session, url, recorder=lambda d, f: recorded.append({"dir": d, "frame": f})
+            session, url, recorder=lambda d, f: recorded.append({"dir": d, "frame": f})
         ) as client,
     ):
         await client.get_config("b2500.yaml")
@@ -488,21 +568,68 @@ async def test_a_deferred_compile_that_finished_before_the_cancel_is_still_disar
     # is then refused, and the armed queued update must still be cleared.
     transcript = [
         server_info(),
-        {"dir": "out", "frame": {"command": "firmware/install", "message_id": "1",
-                                 "args": {"configuration": "b2500.yaml", "port": "OTA"}}},
-        {"dir": "in", "frame": {"message_id": "1", "result": {
-            "job_id": "c1", "job_type": "compile", "status": "running", "is_deferred_install": True}}},
-        {"dir": "out", "frame": {"command": "firmware/cancel", "message_id": "2",
-                                 "args": {"job_id": "c1"}}},
-        {"dir": "in", "frame": {"message_id": "2", "error_code": "invalid_args",
-                                "details": "Cannot cancel a completed job"}},
-        {"dir": "out", "frame": {"command": "firmware/clear_queued_update", "message_id": "3",
-                                 "args": {"configuration": "b2500.yaml"}}},
+        {
+            "dir": "out",
+            "frame": {
+                "command": "firmware/install",
+                "message_id": "1",
+                "args": {"configuration": "b2500.yaml", "port": "OTA"},
+            },
+        },
+        {
+            "dir": "in",
+            "frame": {
+                "message_id": "1",
+                "result": {
+                    "job_id": "c1",
+                    "job_type": "compile",
+                    "status": "running",
+                    "is_deferred_install": True,
+                },
+            },
+        },
+        {
+            "dir": "out",
+            "frame": {"command": "firmware/cancel", "message_id": "2", "args": {"job_id": "c1"}},
+        },
+        {
+            "dir": "in",
+            "frame": {
+                "message_id": "2",
+                "error_code": "invalid_args",
+                "details": "Cannot cancel a completed job",
+            },
+        },
+        {
+            "dir": "out",
+            "frame": {
+                "command": "firmware/clear_queued_update",
+                "message_id": "3",
+                "args": {"configuration": "b2500.yaml"},
+            },
+        },
         {"dir": "in", "frame": {"message_id": "3", "result": None}},
-        {"dir": "out", "frame": {"command": "firmware/follow_job", "message_id": "4",
-                                 "args": {"job_id": "c1"}}},
-        {"dir": "in", "frame": {"message_id": "4", "event": "result", "data": {
-            "status": "completed", "exit_code": 0, "error": None, "queued_update_armed": True}}},
+        {
+            "dir": "out",
+            "frame": {
+                "command": "firmware/follow_job",
+                "message_id": "4",
+                "args": {"job_id": "c1"},
+            },
+        },
+        {
+            "dir": "in",
+            "frame": {
+                "message_id": "4",
+                "event": "result",
+                "data": {
+                    "status": "completed",
+                    "exit_code": 0,
+                    "error": None,
+                    "queued_update_armed": True,
+                },
+            },
+        },
         {"dir": "in", "frame": {"message_id": "4", "result": None}},
     ]
     async with (
@@ -526,7 +653,9 @@ async def test_captured_list() -> None:
     ):
         configurations = await client.list_configurations()
     assert [c.configuration for c in configurations] == [
-        "broken-node.yaml", "host-node.yaml", "offline-node.yaml",
+        "broken-node.yaml",
+        "host-node.yaml",
+        "offline-node.yaml",
     ]
     assert fake.finished
 
@@ -535,9 +664,7 @@ async def test_captured_login_with_a_password() -> None:
     async with (
         serve(load_fixture("auth_login_list")) as (url, fake),
         aiohttp.ClientSession() as session,
-        device_builder.connect(
-                session, url, username="admin", password="spike-password"
-        ) as client,
+        device_builder.connect(session, url, username="admin", password="spike-password") as client,
     ):
         assert [c.name for c in await client.list_configurations()] == ["host-node"]
     assert fake.mismatches == []
@@ -555,12 +682,17 @@ async def test_captured_login_with_a_wrong_password() -> None:
 
 async def test_captured_successful_clean_install() -> None:
     result, output, _ = await _install(
-        with_clean_jobs(load_fixture("install_clean_success")), configuration="host-node.yaml", port="127.0.0.1", clean_build=True
+        with_clean_jobs(load_fixture("install_clean_success")),
+        configuration="host-node.yaml",
+        port="127.0.0.1",
+        clean_build=True,
     )
     assert result.outcome is device_builder.InstallOutcome.COMPLETED
     assert result.error is None
     assert [(job.stage, job.status, job.exit_code) for job in result.jobs] == [
-        ("clean", "completed", 0), ("compile", "completed", 0), ("upload", "completed", 0),
+        ("clean", "completed", 0),
+        ("compile", "completed", 0),
+        ("upload", "completed", 0),
     ]
     assert {stage for stage, _ in output} == {"clean", "compile", "upload"}
     assert ("upload", "\\033[32mINFO OTA successful\\033[0m") in output
@@ -604,22 +736,74 @@ async def test_a_compile_that_arms_a_queued_update_is_refused_as_deferred() -> N
     # and the Device Builder cancels the held upload.
     transcript = [
         server_info(),
-        {"dir": "out", "frame": {"command": "firmware/install", "message_id": "1",
-                                 "args": {"configuration": "b2500.yaml", "port": "OTA"}}},
-        {"dir": "in", "frame": {"message_id": "1", "result": {
-            "job_id": "c1", "job_type": "compile", "status": "queued", "is_deferred_install": False}}},
-        {"dir": "out", "frame": {"command": "firmware/get_jobs", "message_id": "2",
-                                 "args": {"configuration": "b2500.yaml"}}},
-        {"dir": "in", "frame": {"message_id": "2", "result": [
-            {"job_id": "c1", "job_type": "compile", "depends_on": ""},
-            {"job_id": "u1", "job_type": "upload", "depends_on": "c1"}]}},
-        {"dir": "out", "frame": {"command": "firmware/follow_job", "message_id": "3",
-                                 "args": {"job_id": "c1"}}},
-        {"dir": "in", "frame": {"message_id": "3", "event": "result", "data": {
-            "status": "completed", "exit_code": 0, "error": None, "queued_update_armed": True}}},
+        {
+            "dir": "out",
+            "frame": {
+                "command": "firmware/install",
+                "message_id": "1",
+                "args": {"configuration": "b2500.yaml", "port": "OTA"},
+            },
+        },
+        {
+            "dir": "in",
+            "frame": {
+                "message_id": "1",
+                "result": {
+                    "job_id": "c1",
+                    "job_type": "compile",
+                    "status": "queued",
+                    "is_deferred_install": False,
+                },
+            },
+        },
+        {
+            "dir": "out",
+            "frame": {
+                "command": "firmware/get_jobs",
+                "message_id": "2",
+                "args": {"configuration": "b2500.yaml"},
+            },
+        },
+        {
+            "dir": "in",
+            "frame": {
+                "message_id": "2",
+                "result": [
+                    {"job_id": "c1", "job_type": "compile", "depends_on": ""},
+                    {"job_id": "u1", "job_type": "upload", "depends_on": "c1"},
+                ],
+            },
+        },
+        {
+            "dir": "out",
+            "frame": {
+                "command": "firmware/follow_job",
+                "message_id": "3",
+                "args": {"job_id": "c1"},
+            },
+        },
+        {
+            "dir": "in",
+            "frame": {
+                "message_id": "3",
+                "event": "result",
+                "data": {
+                    "status": "completed",
+                    "exit_code": 0,
+                    "error": None,
+                    "queued_update_armed": True,
+                },
+            },
+        },
         {"dir": "in", "frame": {"message_id": "3", "result": None}},
-        {"dir": "out", "frame": {"command": "firmware/clear_queued_update", "message_id": "4",
-                                 "args": {"configuration": "b2500.yaml"}}},
+        {
+            "dir": "out",
+            "frame": {
+                "command": "firmware/clear_queued_update",
+                "message_id": "4",
+                "args": {"configuration": "b2500.yaml"},
+            },
+        },
         {"dir": "in", "frame": {"message_id": "4", "result": None}},
     ]
     async with (
@@ -642,7 +826,8 @@ async def test_addon_successful_clean_install() -> None:
     remote = {"84dcb8482426": "completed", "bef9160385f1": "completed"}
     result, output, _ = await _install(
         with_clean_jobs(load_fixture("addon_success"), remote),
-        configuration="b2500.yaml", clean_build=True,
+        configuration="b2500.yaml",
+        clean_build=True,
     )
     assert result.outcome is device_builder.InstallOutcome.COMPLETED
     assert [(job.job_id, job.stage, job.status) for job in result.jobs] == [
@@ -659,18 +844,22 @@ async def test_a_remote_clean_that_fails_fails_the_install_before_it_compiles() 
     remote = {"84dcb8482426": "completed", "bef9160385f1": "failed"}
     result, _, _ = await _install(
         with_clean_jobs(load_fixture("addon_success"), remote),
-        configuration="b2500.yaml", clean_build=True,
+        configuration="b2500.yaml",
+        clean_build=True,
     )
     assert result.outcome is device_builder.InstallOutcome.FAILED
     assert result.stage == "clean"
     assert result.jobs[-1].job_id == "bef9160385f1"
 
 
-async def test_a_remote_clean_that_failed_before_the_jobs_were_listed_still_fails_the_install() -> None:
+async def test_a_remote_clean_that_failed_before_the_jobs_were_listed_still_fails_the_install() -> (
+    None
+):
     remote = {"84dcb8482426": "completed", "bef9160385f1": "failed"}
     result, _, _ = await _install(
         with_clean_jobs(load_fixture("addon_success"), remote, ended=("bef9160385f1",)),
-        configuration="b2500.yaml", clean_build=True,
+        configuration="b2500.yaml",
+        clean_build=True,
     )
     assert result.outcome is device_builder.InstallOutcome.FAILED
     assert result.stage == "clean"
@@ -687,14 +876,32 @@ async def test_addon_install_on_an_offline_device_is_refused_as_deferred() -> No
 # --- Re-attaching to an Install after a restart -------------------------------
 
 
-def _follow(message_id: str, job_id: str, status: str, *, armed: bool = False) -> list[dict[str, object]]:
+def _follow(
+    message_id: str, job_id: str, status: str, *, armed: bool = False
+) -> list[dict[str, object]]:
     """Frames of one `firmware/follow_job` that ends with *status*."""
     return [
-        {"dir": "out", "frame": {"command": "firmware/follow_job", "message_id": message_id,
-                                 "args": {"job_id": job_id}}},
-        {"dir": "in", "frame": {"message_id": message_id, "event": "result", "data": {
-            "status": status, "exit_code": 0 if status == "completed" else 1, "error": None,
-            "queued_update_armed": armed}}},
+        {
+            "dir": "out",
+            "frame": {
+                "command": "firmware/follow_job",
+                "message_id": message_id,
+                "args": {"job_id": job_id},
+            },
+        },
+        {
+            "dir": "in",
+            "frame": {
+                "message_id": message_id,
+                "event": "result",
+                "data": {
+                    "status": status,
+                    "exit_code": 0 if status == "completed" else 1,
+                    "error": None,
+                    "queued_update_armed": armed,
+                },
+            },
+        },
         {"dir": "in", "frame": {"message_id": message_id, "result": None}},
     ]
 
@@ -703,10 +910,22 @@ async def test_following_a_job_the_device_builder_no_longer_knows_raises_job_not
     # What the Device Builder answers for an unknown or pruned job id.
     transcript = [
         server_info(),
-        {"dir": "out", "frame": {"command": "firmware/follow_job", "message_id": "1",
-                                 "args": {"job_id": "gone"}}},
-        {"dir": "in", "frame": {"message_id": "1", "error_code": "internal_error",
-                                "details": "Command failed: firmware/follow_job"}},
+        {
+            "dir": "out",
+            "frame": {
+                "command": "firmware/follow_job",
+                "message_id": "1",
+                "args": {"job_id": "gone"},
+            },
+        },
+        {
+            "dir": "in",
+            "frame": {
+                "message_id": "1",
+                "error_code": "internal_error",
+                "details": "Command failed: firmware/follow_job",
+            },
+        },
     ]
     async with (
         serve(transcript) as (url, fake),
@@ -723,13 +942,19 @@ async def test_install_reports_the_jobs_still_to_follow_before_following_each() 
     observer = _Recorder()
 
     await _install(
-        with_clean_jobs(load_fixture("install_clean_success")), observer,
-        configuration="host-node.yaml", port="127.0.0.1", clean_build=True,
+        with_clean_jobs(load_fixture("install_clean_success")),
+        observer,
+        configuration="host-node.yaml",
+        port="127.0.0.1",
+        clean_build=True,
     )
     ActiveJob = device_builder.ActiveJob
     assert observer.reported == [
         (ActiveJob("98d512a9c2fd", device_builder.Stage.CLEAN),),
-        (ActiveJob("368f07c5f6ff", device_builder.Stage.COMPILE), ActiveJob("58fd489cd24d", device_builder.Stage.UPLOAD)),
+        (
+            ActiveJob("368f07c5f6ff", device_builder.Stage.COMPILE),
+            ActiveJob("58fd489cd24d", device_builder.Stage.UPLOAD),
+        ),
         (ActiveJob("58fd489cd24d", device_builder.Stage.UPLOAD),),
     ]
 
@@ -752,28 +977,59 @@ async def test_resuming_an_install_follows_its_jobs_to_the_end() -> None:
     ActiveJob = device_builder.ActiveJob
     result, reported = await _resume(
         [*_follow("1", "c1", "completed"), *_follow("2", "u1", "completed")],
-        (ActiveJob("c1", device_builder.Stage.COMPILE), ActiveJob("u1", device_builder.Stage.UPLOAD)),
+        (
+            ActiveJob("c1", device_builder.Stage.COMPILE),
+            ActiveJob("u1", device_builder.Stage.UPLOAD),
+        ),
     )
     assert result.outcome is device_builder.InstallOutcome.COMPLETED
     assert [(job.job_id, job.stage) for job in result.jobs] == [("c1", "compile"), ("u1", "upload")]
     assert reported == [
-        (ActiveJob("c1", device_builder.Stage.COMPILE), ActiveJob("u1", device_builder.Stage.UPLOAD)), (ActiveJob("u1", device_builder.Stage.UPLOAD),),
+        (
+            ActiveJob("c1", device_builder.Stage.COMPILE),
+            ActiveJob("u1", device_builder.Stage.UPLOAD),
+        ),
+        (ActiveJob("u1", device_builder.Stage.UPLOAD),),
     ]
 
 
-async def test_resuming_an_install_that_had_only_got_to_its_clean_build_goes_on_to_compile() -> None:
+async def test_resuming_an_install_that_had_only_got_to_its_clean_build_goes_on_to_compile() -> (
+    None
+):
     ActiveJob = device_builder.ActiveJob
     result, reported = await _resume(
         [
             *_follow("1", "k1", "completed"),
-            {"dir": "out", "frame": {"command": "firmware/install", "message_id": "2",
-                                     "args": {"configuration": "b2500.yaml", "port": "OTA"}}},
-            {"dir": "in", "frame": {"message_id": "2", "result": {
-                "job_id": "c1", "job_type": "compile", "is_deferred_install": False}}},
-            {"dir": "out", "frame": {"command": "firmware/get_jobs", "message_id": "3",
-                                     "args": {"configuration": "b2500.yaml"}}},
-            {"dir": "in", "frame": {"message_id": "3", "result": [
-                {"job_id": "u1", "job_type": "upload", "depends_on": "c1"}]}},
+            {
+                "dir": "out",
+                "frame": {
+                    "command": "firmware/install",
+                    "message_id": "2",
+                    "args": {"configuration": "b2500.yaml", "port": "OTA"},
+                },
+            },
+            {
+                "dir": "in",
+                "frame": {
+                    "message_id": "2",
+                    "result": {"job_id": "c1", "job_type": "compile", "is_deferred_install": False},
+                },
+            },
+            {
+                "dir": "out",
+                "frame": {
+                    "command": "firmware/get_jobs",
+                    "message_id": "3",
+                    "args": {"configuration": "b2500.yaml"},
+                },
+            },
+            {
+                "dir": "in",
+                "frame": {
+                    "message_id": "3",
+                    "result": [{"job_id": "u1", "job_type": "upload", "depends_on": "c1"}],
+                },
+            },
             *_follow("4", "c1", "completed"),
             *_follow("5", "u1", "completed"),
         ],
@@ -783,7 +1039,10 @@ async def test_resuming_an_install_that_had_only_got_to_its_clean_build_goes_on_
     assert [job.stage for job in result.jobs] == ["clean", "compile", "upload"]
     assert reported == [
         (ActiveJob("k1", device_builder.Stage.CLEAN),),
-        (ActiveJob("c1", device_builder.Stage.COMPILE), ActiveJob("u1", device_builder.Stage.UPLOAD)),
+        (
+            ActiveJob("c1", device_builder.Stage.COMPILE),
+            ActiveJob("u1", device_builder.Stage.UPLOAD),
+        ),
         (ActiveJob("u1", device_builder.Stage.UPLOAD),),
     ]
 
@@ -793,10 +1052,19 @@ async def test_a_resumed_compile_that_armed_a_queued_update_is_refused_as_deferr
     result, _ = await _resume(
         [
             *_follow("1", "c1", "completed", armed=True),
-            {"dir": "out", "frame": {"command": "firmware/clear_queued_update", "message_id": "2",
-                                     "args": {"configuration": "b2500.yaml"}}},
+            {
+                "dir": "out",
+                "frame": {
+                    "command": "firmware/clear_queued_update",
+                    "message_id": "2",
+                    "args": {"configuration": "b2500.yaml"},
+                },
+            },
             {"dir": "in", "frame": {"message_id": "2", "result": None}},
         ],
-        (ActiveJob("c1", device_builder.Stage.COMPILE), ActiveJob("u1", device_builder.Stage.UPLOAD)),
+        (
+            ActiveJob("c1", device_builder.Stage.COMPILE),
+            ActiveJob("u1", device_builder.Stage.UPLOAD),
+        ),
     )
     assert result.outcome is device_builder.InstallOutcome.DEFERRED

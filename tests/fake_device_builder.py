@@ -172,7 +172,10 @@ class FakeDeviceBuilder:
             frame = entry["frame"]
             if entry["dir"] == "in":
                 if "message_id" in frame:
-                    frame = {**frame, "message_id": ids.get(frame["message_id"], frame["message_id"])}
+                    frame = {
+                        **frame,
+                        "message_id": ids.get(frame["message_id"], frame["message_id"]),
+                    }
                 if self._current_follow is not None and frame.get("event") == "output":
                     self._replayed_output.setdefault(self._current_follow, []).append(
                         str(frame.get("data", ""))
@@ -221,9 +224,7 @@ class FakeDeviceBuilder:
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.TEXT:
-                    task = asyncio.create_task(
-                        self._answer(ws, json.loads(msg.data))
-                    )
+                    task = asyncio.create_task(self._answer(ws, json.loads(msg.data)))
                     tasks.add(task)
                     task.add_done_callback(done)
         finally:
@@ -360,8 +361,7 @@ def _is_side_command(sent: dict[str, Any], expected: dict[str, Any]) -> bool:
     """Whether *sent* is a file read or write, or a progress poll, where the transcript
     expects another command."""
     return bool(
-        sent.get("command")
-        in ("devices/get_config", "devices/update_config", "firmware/get_job")
+        sent.get("command") in ("devices/get_config", "devices/update_config", "firmware/get_job")
         and sent.get("command") != expected["command"]
     )
 
@@ -441,21 +441,41 @@ def with_clean_jobs(
     configuration = frames[clean_at]["frame"]["args"]["configuration"]
     local = frames[clean_at + 1]["frame"]["result"]
     jobs = [
-        {"job_id": "older-clean", "job_type": "clean", "status": "completed",
-         "created_at": "2026-10-29T21:48:18.799927+00:00", "source": "remote"},
-        {"job_id": local["job_id"], "job_type": "clean", "status": "running",
-         "created_at": local["created_at"], "source": "local"},
+        {
+            "job_id": "older-clean",
+            "job_type": "clean",
+            "status": "completed",
+            "created_at": "2026-10-29T21:48:18.799927+00:00",
+            "source": "remote",
+        },
+        {
+            "job_id": local["job_id"],
+            "job_type": "clean",
+            "status": "running",
+            "created_at": local["created_at"],
+            "source": "local",
+        },
         *(
-            {"job_id": job_id, "job_type": "clean",
-             "status": status if job_id in ended else "queued",
-             # Queued right after the local clean, by the same command.
-             "created_at": local["created_at"], "source": "remote"}
+            {
+                "job_id": job_id,
+                "job_type": "clean",
+                "status": status if job_id in ended else "queued",
+                # Queued right after the local clean, by the same command.
+                "created_at": local["created_at"],
+                "source": "remote",
+            }
             for job_id, status in remote.items()
         ),
     ]
     listing: Transcript = [
-        {"dir": "out", "frame": {"command": "firmware/get_jobs", "message_id": "clean-jobs",
-                                 "args": {"configuration": configuration}}},
+        {
+            "dir": "out",
+            "frame": {
+                "command": "firmware/get_jobs",
+                "message_id": "clean-jobs",
+                "args": {"configuration": configuration},
+            },
+        },
         {"dir": "in", "frame": {"message_id": "clean-jobs", "result": jobs}},
     ]
     install_at = _index_of(frames, "firmware/install")
@@ -463,8 +483,14 @@ def with_clean_jobs(
     for job_id, status in remote.items():
         message_id = f"follow-{job_id}"
         replay += [
-            {"dir": "out", "frame": {"command": "firmware/follow_job", "message_id": message_id,
-                                     "args": {"job_id": job_id}}},
+            {
+                "dir": "out",
+                "frame": {
+                    "command": "firmware/follow_job",
+                    "message_id": message_id,
+                    "args": {"job_id": job_id},
+                },
+            },
             *(
                 {"dir": "in", "frame": {"message_id": message_id, **event}}
                 for event in job_events(f"INFO Deleting build/{job_id}\n", status=status)
@@ -513,14 +539,40 @@ def queue_install(
     up to following its jobs, which `jobs` then answers."""
     return [
         server_info(esphome_version="2026.10.1"),
-        {"dir": "out", "frame": {"command": "firmware/install", "message_id": "1",
-                                 "args": {"configuration": configuration, "port": port}}},
-        {"dir": "in", "frame": {"message_id": "1", "result": {
-            "job_id": compile_id, "job_type": "compile", "is_deferred_install": False}}},
-        {"dir": "out", "frame": {"command": "firmware/get_jobs", "message_id": "2",
-                                 "args": {"configuration": configuration}}},
-        {"dir": "in", "frame": {"message_id": "2", "result": [
-            {"job_id": upload_id, "job_type": "upload", "depends_on": compile_id}]}},
+        {
+            "dir": "out",
+            "frame": {
+                "command": "firmware/install",
+                "message_id": "1",
+                "args": {"configuration": configuration, "port": port},
+            },
+        },
+        {
+            "dir": "in",
+            "frame": {
+                "message_id": "1",
+                "result": {
+                    "job_id": compile_id,
+                    "job_type": "compile",
+                    "is_deferred_install": False,
+                },
+            },
+        },
+        {
+            "dir": "out",
+            "frame": {
+                "command": "firmware/get_jobs",
+                "message_id": "2",
+                "args": {"configuration": configuration},
+            },
+        },
+        {
+            "dir": "in",
+            "frame": {
+                "message_id": "2",
+                "result": [{"job_id": upload_id, "job_type": "upload", "depends_on": compile_id}],
+            },
+        },
     ]
 
 

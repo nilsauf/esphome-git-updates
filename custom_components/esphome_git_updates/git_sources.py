@@ -640,7 +640,9 @@ def _substitute(value: Any, substitutions: dict[str, Any]) -> Any:
 def _find_secret(value: Any) -> _Secret | None:
     if isinstance(value, _Secret):
         return value
-    children = value.values() if isinstance(value, dict) else value if isinstance(value, list) else ()
+    children = (
+        value.values() if isinstance(value, dict) else value if isinstance(value, list) else ()
+    )
     for child in children:
         if (secret := _find_secret(child)) is not None:
             return secret

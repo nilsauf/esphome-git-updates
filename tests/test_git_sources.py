@@ -76,9 +76,7 @@ external_components:
     assert discovery.sources == ()
 
 
-@pytest.mark.parametrize(
-    "ref", ["0123456789abcdef0123456789abcdef01234567", "0123abc"]
-)
+@pytest.mark.parametrize("ref", ["0123456789abcdef0123456789abcdef01234567", "0123abc"])
 async def test_a_ref_that_is_a_commit_sha_is_pinned_and_ignored(ref: str) -> None:
     discovery = await _discover(
         f"""
@@ -191,7 +189,9 @@ external_components:
     )
 
 
-async def test_a_source_that_depends_on_a_secret_is_untrackable_and_secrets_are_never_read() -> None:
+async def test_a_source_that_depends_on_a_secret_is_untrackable_and_secrets_are_never_read() -> (
+    None
+):
     files = Files(
         {
             "node.yaml": """
@@ -357,9 +357,7 @@ external_components:
         GitSource(
             name="marsrelay@main", url="https://github.com/tomquist/marsrelay.git", ref="main"
         ),
-        GitSource(
-            name="marsrelay@dev", url="https://github.com/tomquist/marsrelay.git", ref="dev"
-        ),
+        GitSource(name="marsrelay@dev", url="https://github.com/tomquist/marsrelay.git", ref="dev"),
     )
 
 
@@ -417,9 +415,7 @@ async def test_an_ota_entry_with_platform_esphome_or_web_server_is_found(platfor
     assert discovery.ota is OtaStatus.PRESENT
 
 
-@pytest.mark.parametrize(
-    "main", ["esphome:\n  name: node\n", "ota:\n  - platform: http_request\n"]
-)
+@pytest.mark.parametrize("main", ["esphome:\n  name: node\n", "ota:\n  - platform: http_request\n"])
 async def test_a_config_without_an_ota_platform_esphome_or_web_server_misses_ota(main: str) -> None:
     discovery = await _discover(main)
 
@@ -518,11 +514,7 @@ packages:
 """
     discovery = await _discover(main)
 
-    edits = [
-        (location, "v1.5.0")
-        for source in discovery.sources
-        for location in source.written_at
-    ]
+    edits = [(location, "v1.5.0") for source in discovery.sources for location in source.written_at]
     assert len(edits) == 2
     assert rewritten(main, edits) == main.replace(
         "# sensors\n", "# sensors\n      ref: v1.5.0\n"
@@ -555,13 +547,9 @@ packages:
 """
     discovery = await _discover(main)
 
-    edits = [
-        (location, "v1.5.0")
-        for source in discovery.sources
-        for location in source.written_at
-    ]
+    edits = [(location, "v1.5.0") for source in discovery.sources for location in source.written_at]
     assert len(edits) == 2
-    assert rewritten(main, edits) == main.replace("marsrelay\"", "marsrelay@v1.5.0\"").replace(
+    assert rewritten(main, edits) == main.replace('marsrelay"', 'marsrelay@v1.5.0"').replace(
         "common.yaml", "common.yaml@v1.5.0"
     )
 

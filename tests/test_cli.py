@@ -27,7 +27,9 @@ async def test_list_prints_one_configuration_per_line(capsys: pytest.CaptureFixt
     ]
 
 
-async def test_install_exits_3_when_the_install_is_deferred(capsys: pytest.CaptureFixture[str]) -> None:
+async def test_install_exits_3_when_the_install_is_deferred(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     assert await _run("install_deferred_at_enqueue", "install", "offline-node.yaml") == 3
     assert "deferred at compile: device offline; refused" in capsys.readouterr().err
 
@@ -40,8 +42,14 @@ async def test_install_exits_1_when_the_compile_fails(capsys: pytest.CaptureFixt
 async def test_record_writes_a_replayable_transcript_without_credentials(tmp_path: Path) -> None:
     record = tmp_path / "t.json"
     code = await _run(
-        "auth_login_list", "--username", "admin", "--password", "hunter2",
-        "--record", str(record), "list",
+        "auth_login_list",
+        "--username",
+        "admin",
+        "--password",
+        "hunter2",
+        "--record",
+        str(record),
+        "list",
     )
     assert code == 0
     text = record.read_text()

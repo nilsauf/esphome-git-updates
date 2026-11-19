@@ -396,9 +396,7 @@ class DeviceBuilderClient:
             return await self._follow(run, await self._clean_jobs(configuration, clean))
         return await self._compile_and_upload(run)
 
-    async def _clean_jobs(
-        self, configuration: str, local: dict[str, Any]
-    ) -> tuple[ActiveJob, ...]:
+    async def _clean_jobs(self, configuration: str, local: dict[str, Any]) -> tuple[ActiveJob, ...]:
         """The *local* clean job, then the clean jobs it fanned out to remote build servers.
 
         `firmware/clean` returns only the local job, but also queues one clean per
@@ -440,9 +438,7 @@ class DeviceBuilderClient:
         goes on to compile and upload. Raises `JobNotFound` if the Device
         Builder no longer knows a job.
         """
-        return await self._follow(
-            _InstallRun(configuration, port, observer), jobs
-        )
+        return await self._follow(_InstallRun(configuration, port, observer), jobs)
 
     async def _compile_and_upload(self, run: _InstallRun) -> InstallResult:
         compile_job = await self._command(
@@ -458,17 +454,13 @@ class DeviceBuilderClient:
             run, (ActiveJob(compile_id, Stage.COMPILE), ActiveJob(upload_id, Stage.UPLOAD))
         )
 
-    async def _follow(
-        self, run: _InstallRun, jobs: tuple[ActiveJob, ...]
-    ) -> InstallResult:
+    async def _follow(self, run: _InstallRun, jobs: tuple[ActiveJob, ...]) -> InstallResult:
         """Follow *jobs* in order, then go on to compile if they were a Clean Build."""
         for index, job in enumerate(jobs):
             await run.observer.jobs(jobs[index:])
             run.results.append(await run.follow(self, job))
             if run.results[-1].queued_update_armed:
-                await self._command(
-                    "firmware/clear_queued_update", configuration=run.configuration
-                )
+                await self._command("firmware/clear_queued_update", configuration=run.configuration)
                 return run.done(InstallOutcome.DEFERRED)
             if not run.results[-1].succeeded:
                 return run.done(InstallOutcome.FAILED)
@@ -511,9 +503,7 @@ class DeviceBuilderClient:
                     )
                 except TimeoutError:
                     _LOGGER.debug("progress poll for job %s timed out", job_id)
-                poller = asyncio.create_task(
-                    self._poll_progress_loop(job_id, stage, on_progress)
-                )
+                poller = asyncio.create_task(self._poll_progress_loop(job_id, stage, on_progress))
             while True:
                 frame = await self._next_frame(message_id)
                 event = frame.get("event")
@@ -574,9 +564,7 @@ class DeviceBuilderClient:
         if percent is not None:
             self._notify_progress(on_progress, JobProgress(stage, percent))
 
-    def _notify_progress(
-        self, on_progress: ProgressCallback, update: JobProgress
-    ) -> None:
+    def _notify_progress(self, on_progress: ProgressCallback, update: JobProgress) -> None:
         """Hand *update* to *on_progress*, whatever it does.
 
         Progress is cosmetic: losing it never fails an Install (ticket 14),

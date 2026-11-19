@@ -154,7 +154,9 @@ async def test_a_refused_login_is_reported_and_the_form_is_shown_again(hass: Hom
     assert result["errors"] == {"base": "invalid_auth"}
 
 
-async def test_missing_credentials_for_a_protected_builder_are_reported(hass: HomeAssistant) -> None:
+async def test_missing_credentials_for_a_protected_builder_are_reported(
+    hass: HomeAssistant,
+) -> None:
     async with serve([server_info(requires_auth=True)]) as (url, _):
         result = await _start(hass, url)
 
@@ -331,7 +333,12 @@ async def test_a_blank_github_token_is_not_saved(hass: HomeAssistant) -> None:
 
     await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {"clean_build": False, "git_poll_interval": 30, "upload_address": "OTA", "github_token": " "},
+        {
+            "clean_build": False,
+            "git_poll_interval": 30,
+            "upload_address": "OTA",
+            "github_token": " ",
+        },
     )
 
     assert "github_token" not in entry.options
@@ -341,7 +348,12 @@ async def test_a_cleared_github_token_is_removed(hass: HomeAssistant) -> None:
     entry, result = await _options_form(hass)
     await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {"clean_build": False, "git_poll_interval": 30, "upload_address": "OTA", "github_token": "t"},
+        {
+            "clean_build": False,
+            "git_poll_interval": 30,
+            "upload_address": "OTA",
+            "github_token": "t",
+        },
     )
     _, result = await _options_form_of(hass, entry)
 
