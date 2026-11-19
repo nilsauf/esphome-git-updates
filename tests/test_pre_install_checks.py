@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Any
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
@@ -22,6 +21,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.esphome_git_updates.const import DOMAIN
 from fake_device_builder import FakeDeviceBuilder, install_transcript, serve, server_info
 from git_repo import GitRepo
+from stored_record import record_an_install
 from tracked_config import CONFIGURATION, ENTITY_ID, OTA, install, press_install, set_up, tick
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
@@ -46,15 +46,9 @@ async def builder(marsrelay: GitRepo) -> AsyncIterator[FakeDeviceBuilder]:
         yield fake
 
 
-async def _set_up_with_an_update(
-    hass: HomeAssistant, fake: FakeDeviceBuilder, hass_storage: dict[str, Any]
-) -> MockConfigEntry:
+async def _set_up_with_an_update(hass: HomeAssistant, fake: FakeDeviceBuilder) -> MockConfigEntry:
     """An entry whose device runs 2026.10.0 while the Device Builder has 2026.10.1."""
-    hass_storage[f"{DOMAIN}.tracked"] = {
-        "version": 1,
-        "key": f"{DOMAIN}.tracked",
-        "data": {"installed_esphome_version": "2026.10.0"},
-    }
+    await record_an_install(hass, "tracked", "2026.10.0")
     return await set_up(hass, fake)
 
 
@@ -66,10 +60,9 @@ async def test_an_install_of_a_config_without_ota_is_refused_and_starts_no_job(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
     marsrelay: GitRepo,
-    hass_storage: dict[str, Any],
 ) -> None:
     builder.files[CONFIGURATION] = _config(marsrelay, ota="")
-    await _set_up_with_an_update(hass, builder, hass_storage)
+    await _set_up_with_an_update(hass, builder)
 
     # The polls' transcript: a firmware/install would be a mismatch.
     with pytest.raises(HomeAssistantError):
@@ -83,12 +76,11 @@ async def test_each_repair_issue_is_raised_by_the_poll_and_clears_once_the_yaml_
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
     marsrelay: GitRepo,
-    hass_storage: dict[str, Any],
     issue_registry: ir.IssueRegistry,
     freezer: FrozenDateTimeFactory,
 ) -> None:
     builder.files[CONFIGURATION] = _config(marsrelay, ota="", refresh=None)
-    await _set_up_with_an_update(hass, builder, hass_storage)
+    await _set_up_with_an_update(hass, builder)
     assert _issue(issue_registry, "missing_ota") is not None
     issue = _issue(issue_registry, "refresh_policy")
     assert issue is not None
@@ -108,11 +100,10 @@ async def test_an_install_reads_the_yaml_again_so_a_fix_counts_without_waiting_f
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
     marsrelay: GitRepo,
-    hass_storage: dict[str, Any],
     issue_registry: ir.IssueRegistry,
 ) -> None:
     builder.files[CONFIGURATION] = _config(marsrelay, ota="")
-    await _set_up_with_an_update(hass, builder, hass_storage)
+    await _set_up_with_an_update(hass, builder)
     builder.files[CONFIGURATION] = _config(marsrelay)
 
     await install(hass, builder, "install_clean_success")
@@ -124,10 +115,9 @@ async def test_an_install_reads_the_yaml_again_so_a_fix_counts_without_waiting_f
 async def test_a_config_that_passes_both_checks_installs_and_raises_no_issue(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
-    hass_storage: dict[str, Any],
     issue_registry: ir.IssueRegistry,
 ) -> None:
-    await _set_up_with_an_update(hass, builder, hass_storage)
+    await _set_up_with_an_update(hass, builder)
 
     await install(hass, builder, "install_clean_success")
 
@@ -138,9 +128,8 @@ async def test_a_config_that_passes_both_checks_installs_and_raises_no_issue(
 async def test_an_install_is_refused_when_the_yaml_cannot_be_read_to_check_it(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
-    hass_storage: dict[str, Any],
 ) -> None:
-    await _set_up_with_an_update(hass, builder, hass_storage)
+    await _set_up_with_an_update(hass, builder)
     builder.files[CONFIGURATION] = "external_components: [\n"
 
     with pytest.raises(HomeAssistantError, match="cannot read its YAML"):
@@ -153,11 +142,10 @@ async def test_removing_the_entry_drops_its_pre_install_repair_issues(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
     marsrelay: GitRepo,
-    hass_storage: dict[str, Any],
     issue_registry: ir.IssueRegistry,
 ) -> None:
     builder.files[CONFIGURATION] = _config(marsrelay, ota="", refresh=None)
-    entry = await _set_up_with_an_update(hass, builder, hass_storage)
+    entry = await _set_up_with_an_update(hass, builder)
 
     assert await hass.config_entries.async_remove(entry.entry_id)
     await hass.async_block_till_done()
@@ -168,9 +156,8 @@ async def test_removing_the_entry_drops_its_pre_install_repair_issues(
 async def test_a_second_press_while_the_first_is_still_checking_is_refused(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
-    hass_storage: dict[str, Any],
 ) -> None:
-    await _set_up_with_an_update(hass, builder, hass_storage)
+    await _set_up_with_an_update(hass, builder)
     polls = builder.transcript
     builder.transcript = install_transcript("install_clean_success", CONFIGURATION)
 

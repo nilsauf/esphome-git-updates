@@ -28,6 +28,9 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry, async_
 
 from custom_components.esphome_git_updates.connection import protocol_issue_id
 from custom_components.esphome_git_updates.const import DOMAIN
+from custom_components.esphome_git_updates.device_builder import OTA as OTA_PORT
+from custom_components.esphome_git_updates.device_builder import ActiveJob, Stage
+from custom_components.esphome_git_updates.install import ActiveInstall, InstallPlan
 from fake_device_builder import (
     FakeDeviceBuilder,
     Transcript,
@@ -38,6 +41,7 @@ from fake_device_builder import (
     serve,
     server_info,
 )
+from stored_record import record_an_install, recorded_esphome_version, stored_record
 from tracked_config import OTA
 
 ENTITY_ID = "update.host_node_firmware"
@@ -133,16 +137,10 @@ async def test_the_entity_sits_on_a_device_the_integration_creates(
 async def test_an_update_is_offered_when_the_available_version_differs_from_the_installed_one(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
-    hass_storage: dict[str, Any],
 ) -> None:
     url, _ = builder
-    entry_id = "tracked"
-    hass_storage[f"{DOMAIN}.{entry_id}"] = {
-        "version": 1,
-        "key": f"{DOMAIN}.{entry_id}",
-        "data": {"installed_esphome_version": "2026.10.2"},
-    }
-    await _set_up(hass, url, entry_id=entry_id)
+    await record_an_install(hass, "tracked", "2026.10.2")
+    await _set_up(hass, url, entry_id="tracked")
 
     state = hass.states.get(ENTITY_ID)
     assert state is not None
@@ -218,51 +216,33 @@ async def test_removing_the_entry_drops_its_repair_issue_and_stored_versions(
     builder: tuple[str, FakeDeviceBuilder],
     freezer: FrozenDateTimeFactory,
     issue_registry: ir.IssueRegistry,
-    hass_storage: dict[str, Any],
 ) -> None:
     url, fake = builder
     entry = await _set_up(hass, url)
     fake.transcript = [server_info("2.0.0")]
     await _poll(hass, freezer)
     assert list(issue_registry.issues) != []
-    assert f"{DOMAIN}.{entry.entry_id}" in hass_storage
+    assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
 
     assert await hass.config_entries.async_remove(entry.entry_id)
     await hass.async_block_till_done()
 
     assert list(issue_registry.issues) == []
-    assert f"{DOMAIN}.{entry.entry_id}" not in hass_storage
+    assert await recorded_esphome_version(hass, entry.entry_id) is None
 
 
-async def _set_up_with_an_update(
-    hass: HomeAssistant, url: str, hass_storage: dict[str, Any], **options: Any
-) -> MockConfigEntry:
+async def _set_up_with_an_update(hass: HomeAssistant, url: str, **options: Any) -> MockConfigEntry:
     """An entry with *options* whose device runs 2026.10.0 while the Device Builder
     has 2026.10.1."""
-    entry_id = "tracked"
-    hass_storage[f"{DOMAIN}.{entry_id}"] = {
-        "version": 1,
-        "key": f"{DOMAIN}.{entry_id}",
-        "data": {"installed_esphome_version": "2026.10.0"},
-    }
-    entry = await _set_up(hass, url, entry_id=entry_id, options=options)
+    await record_an_install(hass, "tracked", "2026.10.0")
+    entry = await _set_up(hass, url, entry_id="tracked", options=options)
     assert hass.states.get(ENTITY_ID).state == STATE_ON  # type: ignore[union-attr]
     return entry
 
 
 async def _install(hass: HomeAssistant) -> None:
-    await hass.services.async_call(
-        "update", "install", {"entity_id": ENTITY_ID}, blocking=True
-    )
+    await hass.services.async_call("update", "install", {"entity_id": ENTITY_ID}, blocking=True)
     await hass.async_block_till_done()
-
-
-def _recorded_version(hass_storage: dict[str, Any], entry: MockConfigEntry) -> str | None:
-    """The Installed ESPHome Version in the entry's store, as saved to disk."""
-    version: str | None = hass_storage[f"{DOMAIN}.{entry.entry_id}"]["data"].get(
-        "installed_esphome_version"
-    )
-    return version
 
 
 def _notifications(hass: HomeAssistant) -> list[persistent_notification.Notification]:
@@ -272,10 +252,9 @@ def _notifications(hass: HomeAssistant) -> list[persistent_notification.Notifica
 async def test_a_successful_install_records_the_version_and_the_update_disappears(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
-    hass_storage: dict[str, Any],
 ) -> None:
     url, fake = builder
-    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    entry = await _set_up_with_an_update(hass, url)
     fake.transcript = install_transcript("install_clean_success")
     in_progress: list[bool] = []
     stop_listening = hass.bus.async_listen(
@@ -295,19 +274,18 @@ async def test_a_successful_install_records_the_version_and_the_update_disappear
     assert state.state == STATE_OFF
     assert state.attributes["installed_version"] == "2026.10.1"
     assert state.attributes["in_progress"] is False
-    assert _recorded_version(hass_storage, entry) == "2026.10.1"
-    assert _active_jobs(hass_storage, entry) is None
+    assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
+    assert await _active_jobs(hass, entry) is None
     assert _notifications(hass) == []
 
 
 async def test_a_device_builder_that_answers_an_install_unexpectedly_raises_a_repair_issue(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
-    hass_storage: dict[str, Any],
     issue_registry: ir.IssueRegistry,
 ) -> None:
     url, fake = builder
-    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    entry = await _set_up_with_an_update(hass, url)
     transcript = queue_install("c1", "u1")
     fake.transcript = [*transcript[:2], {"dir": "in", "frame": {"message_id": "1", "result": "?"}}]
 
@@ -324,10 +302,9 @@ async def test_a_device_builder_that_answers_an_install_unexpectedly_raises_a_re
 async def test_a_failed_compile_notifies_with_the_stage_error_and_log_tail_and_records_nothing(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
-    hass_storage: dict[str, Any],
 ) -> None:
     url, fake = builder
-    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    entry = await _set_up_with_an_update(hass, url)
     fake.transcript = install_transcript("install_compile_failed")
 
     with pytest.raises(HomeAssistantError, match="compile"):
@@ -339,7 +316,7 @@ async def test_a_failed_compile_notifies_with_the_stage_error_and_log_tail_and_r
     assert state.state == STATE_ON
     assert state.attributes["installed_version"] == "2026.10.0"
     assert state.attributes["in_progress"] is False
-    assert _recorded_version(hass_storage, entry) == "2026.10.0"
+    assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.0"
     [notification] = _notifications(hass)
     assert "host-node" in str(notification["title"])
     message = notification["message"]
@@ -371,17 +348,16 @@ def _with_output_line(transcript: Transcript, stage_index: int, line: str) -> Tr
 async def test_a_successful_install_with_warnings_notifies_with_the_warnings(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
-    hass_storage: dict[str, Any],
 ) -> None:
     url, fake = builder
-    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    entry = await _set_up_with_an_update(hass, url)
     warning = "\\033[33mWARNING GPIO2 is a strapping PIN and should only be used for I/O with care.\\033[0m\n"
     fake.transcript = _with_output_line(install_transcript("install_clean_success"), 0, warning)
 
     await _install(hass)
 
     assert fake.mismatches == []
-    assert _recorded_version(hass_storage, entry) == "2026.10.1"
+    assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
     [notification] = _notifications(hass)
     assert "host-node" in str(notification["title"])
     assert "warning" in str(notification["title"]).lower()
@@ -395,10 +371,9 @@ async def test_a_successful_install_with_warnings_notifies_with_the_warnings(
 async def test_a_clean_success_dismisses_the_notification_of_an_earlier_failed_install(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
-    hass_storage: dict[str, Any],
 ) -> None:
     url, fake = builder
-    await _set_up_with_an_update(hass, url, hass_storage)
+    await _set_up_with_an_update(hass, url)
     fake.transcript = install_transcript("install_upload_failed")
     with pytest.raises(HomeAssistantError):
         await _install(hass)
@@ -413,10 +388,9 @@ async def test_a_clean_success_dismisses_the_notification_of_an_earlier_failed_i
 async def test_an_install_the_device_builder_defers_for_an_offline_device_fails_as_device_offline(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
-    hass_storage: dict[str, Any],
 ) -> None:
     url, fake = builder
-    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    entry = await _set_up_with_an_update(hass, url)
     # Captured: the deferred compile is cancelled and the queued update cleared.
     fake.transcript = install_transcript("install_deferred_at_enqueue")
 
@@ -426,17 +400,17 @@ async def test_an_install_the_device_builder_defers_for_an_offline_device_fails_
     assert fake.mismatches == []
     assert fake.finished
     assert hass.states.get(ENTITY_ID).state == STATE_ON  # type: ignore[union-attr]
-    assert _recorded_version(hass_storage, entry) == "2026.10.0"
-    assert _active_jobs(hass_storage, entry) is None
+    assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.0"
+    assert await _active_jobs(hass, entry) is None
     [notification] = _notifications(hass)
     assert "device offline" in str(notification["title"]).lower()
     assert "queued update was cleared" in notification["message"]
 
 
-def _active_jobs(hass_storage: dict[str, Any], entry: MockConfigEntry) -> list[dict[str, str]] | None:
-    """The jobs of the running Install in the entry's store, as saved to disk."""
-    active = hass_storage[f"{DOMAIN}.{entry.entry_id}"]["data"].get("active_install")
-    return None if active is None else list(active["jobs"])
+async def _active_jobs(hass: HomeAssistant, entry: MockConfigEntry) -> tuple[ActiveJob, ...] | None:
+    """The jobs of the running Install the entry's record holds, as saved."""
+    active = (await stored_record(hass, entry.entry_id)).active_install
+    return None if active is None else active.jobs
 
 
 def _changed(seen: list[Any], value: Any) -> None:
@@ -459,23 +433,22 @@ def _attribute_changes(hass: HomeAssistant, attribute: str) -> tuple[list[Any], 
 async def test_an_install_interrupted_by_a_restart_is_re_attached_and_recorded(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
-    hass_storage: dict[str, Any],
 ) -> None:
     url, fake = builder
-    entry = await _set_up_with_an_update(hass, url, hass_storage)
+    entry = await _set_up_with_an_update(hass, url)
     fake.transcript = queue_install("c1", "u1")
     fake.jobs = {"c1": job_events("INFO Compiling", status=None)}
 
     await hass.services.async_call("update", "install", {"entity_id": ENTITY_ID})
     await fake.running.wait()
 
-    jobs = [{"job_id": "c1", "stage": "compile"}, {"job_id": "u1", "stage": "upload"}]
-    assert _active_jobs(hass_storage, entry) == jobs
+    jobs = (ActiveJob("c1", Stage.COMPILE), ActiveJob("u1", Stage.UPLOAD))
+    assert await _active_jobs(hass, entry) == jobs
 
     # Home Assistant stops while the compile runs on.
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
-    assert _active_jobs(hass_storage, entry) == jobs
+    assert await _active_jobs(hass, entry) == jobs
 
     # It comes back; the Device Builder kept the jobs and one is still running.
     fake.transcript = [server_info(esphome_version="2026.10.1")]
@@ -502,36 +475,29 @@ async def test_an_install_interrupted_by_a_restart_is_re_attached_and_recorded(
     assert state.state == STATE_OFF
     assert state.attributes["in_progress"] is False
     assert seen[-1] is False and True in seen
-    assert _recorded_version(hass_storage, entry) == "2026.10.1"
-    assert _active_jobs(hass_storage, entry) is None
+    assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
+    assert await _active_jobs(hass, entry) is None
     assert _notifications(hass) == []
 
 
 async def _set_up_after_a_restart(
     hass: HomeAssistant,
     url: str,
-    hass_storage: dict[str, Any],
     *,
     wait: bool = True,
     clean_build: bool = False,
 ) -> MockConfigEntry:
-    """An entry whose store holds an Install that was running when HA stopped.
+    """An entry whose record holds an Install that was running when HA stopped.
 
     With *wait*, returns once the re-attached Install has ended."""
-    entry_id = "tracked"
-    hass_storage[f"{DOMAIN}.{entry_id}"] = {
-        "version": 1,
-        "key": f"{DOMAIN}.{entry_id}",
-        "data": {
-            "installed_esphome_version": "2026.10.0",
-            "active_install": {
-                "jobs": [{"job_id": "c1", "stage": "compile"}, {"job_id": "u1", "stage": "upload"}],
-                "commits": {},
-                "clean_build": clean_build,
-            },
-        },
-    }
-    entry = await _set_up(hass, url, entry_id=entry_id)
+    record = await record_an_install(hass, "tracked", "2026.10.0")
+    await record.async_set_active_install(
+        ActiveInstall(
+            (ActiveJob("c1", Stage.COMPILE), ActiveJob("u1", Stage.UPLOAD)),
+            InstallPlan({}, OTA_PORT, clean_build),
+        )
+    )
+    entry = await _set_up(hass, url, entry_id="tracked")
     if wait:
         await hass.async_block_till_done(wait_background_tasks=True)
     return entry
@@ -540,18 +506,17 @@ async def _set_up_after_a_restart(
 async def test_a_re_attached_install_whose_jobs_are_gone_tells_the_user_the_outcome_is_unknown(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
-    hass_storage: dict[str, Any],
 ) -> None:
     url, fake = builder
-    entry = await _set_up_after_a_restart(hass, url, hass_storage)
+    entry = await _set_up_after_a_restart(hass, url)
 
     assert fake.followed == ["c1"]
     state = hass.states.get(ENTITY_ID)
     assert state is not None
     assert state.state == STATE_ON
     assert state.attributes["in_progress"] is False
-    assert _recorded_version(hass_storage, entry) == "2026.10.0"
-    assert _active_jobs(hass_storage, entry) is None
+    assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.0"
+    assert await _active_jobs(hass, entry) is None
     [notification] = _notifications(hass)
     assert "unknown" in str(notification["title"]).lower()
     assert "restarted" in notification["message"]
@@ -560,11 +525,10 @@ async def test_a_re_attached_install_whose_jobs_are_gone_tells_the_user_the_outc
 async def test_an_install_cannot_start_while_a_re_attached_one_runs(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
-    hass_storage: dict[str, Any],
 ) -> None:
     url, fake = builder
     fake.jobs = {"c1": job_events("INFO Compiling", status=None)}
-    entry = await _set_up_after_a_restart(hass, url, hass_storage, wait=False)
+    entry = await _set_up_after_a_restart(hass, url, wait=False)
     await fake.running.wait()
 
     with pytest.raises(HomeAssistantError, match="already in progress"):
@@ -576,10 +540,9 @@ async def test_an_install_cannot_start_while_a_re_attached_one_runs(
 async def test_with_clean_build_on_an_install_cleans_before_it_compiles(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
-    hass_storage: dict[str, Any],
 ) -> None:
     url, fake = builder
-    entry = await _set_up_with_an_update(hass, url, hass_storage, clean_build=True)
+    entry = await _set_up_with_an_update(hass, url, clean_build=True)
     # The transcript expects `firmware/clean`, then the clean followed, then
     # `firmware/install`: any other order is a mismatch.
     fake.transcript = install_transcript("install_clean_success", clean={})
@@ -588,49 +551,45 @@ async def test_with_clean_build_on_an_install_cleans_before_it_compiles(
 
     assert fake.mismatches == []
     assert fake.finished
-    assert _recorded_version(hass_storage, entry) == "2026.10.1"
+    assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
     assert _notifications(hass) == []
 
 
 async def test_the_upload_address_override_is_the_install_port(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
-    hass_storage: dict[str, Any],
 ) -> None:
     url, fake = builder
-    entry = await _set_up_with_an_update(hass, url, hass_storage, upload_address="192.168.1.42")
+    entry = await _set_up_with_an_update(hass, url, upload_address="192.168.1.42")
     fake.transcript = install_transcript("install_clean_success", port="192.168.1.42")
 
     await _install(hass)
 
     assert fake.mismatches == []
     assert fake.finished
-    assert _recorded_version(hass_storage, entry) == "2026.10.1"
+    assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
 
 
 async def test_an_install_re_attached_during_its_clean_build_uploads_where_it_was_started_for(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
-    hass_storage: dict[str, Any],
 ) -> None:
     url, fake = builder
     entry_id = "tracked"
-    hass_storage[f"{DOMAIN}.{entry_id}"] = {
-        "version": 1,
-        "key": f"{DOMAIN}.{entry_id}",
-        "data": {
-            "installed_esphome_version": "2026.10.0",
-            "active_install": {
-                "jobs": [{"job_id": "k1", "stage": "clean"}],
-                "commits": {},
-                "port": "192.168.1.42",
-            },
-        },
-    }
+    record = await record_an_install(hass, entry_id, "2026.10.0")
+    await record.async_set_active_install(
+        ActiveInstall((ActiveJob("k1", Stage.CLEAN),), InstallPlan({}, "192.168.1.42", False))
+    )
     fake.transcript = [
         server_info(esphome_version="2026.10.1"),
-        {"dir": "out", "frame": {"command": "firmware/follow_job", "message_id": "k",
-                                 "args": {"job_id": "k1"}}},
+        {
+            "dir": "out",
+            "frame": {
+                "command": "firmware/follow_job",
+                "message_id": "k",
+                "args": {"job_id": "k1"},
+            },
+        },
         *({"dir": "in", "frame": {"message_id": "k", **event}} for event in job_events("Done")),
         {"dir": "in", "frame": {"message_id": "k", "result": None}},
         *queue_install("c1", "u1", port="192.168.1.42")[1:],
@@ -642,16 +601,15 @@ async def test_an_install_re_attached_during_its_clean_build_uploads_where_it_wa
     await hass.async_block_till_done(wait_background_tasks=True)
 
     assert fake.mismatches == []
-    assert _recorded_version(hass_storage, entry) == "2026.10.1"
+    assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
 
 
 async def test_install_progress_moves_through_the_compile_and_upload_bands(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
-    hass_storage: dict[str, Any],
 ) -> None:
     url, fake = builder
-    await _set_up_with_an_update(hass, url, hass_storage)
+    await _set_up_with_an_update(hass, url)
     fake.transcript = queue_install("c1", "u1")
     # The remote compile's ninja output tops out at 99; the upload reaches 100.
     fake.jobs = {
@@ -690,15 +648,12 @@ async def _wait_for_percentage(hass: HomeAssistant, expected: int) -> None:
     except AssertionError:
         state = hass.states.get(ENTITY_ID)
         actual = None if state is None else state.attributes.get("update_percentage")
-        raise AssertionError(
-            f"update_percentage never became {expected}: {actual}"
-        ) from None
+        raise AssertionError(f"update_percentage never became {expected}: {actual}") from None
 
 
 async def test_a_re_attached_install_shows_progress_from_its_job_and_completes(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
-    hass_storage: dict[str, Any],
 ) -> None:
     url, fake = builder
     # It had a Clean Build on, so the compile's 0-100 maps onto 5-90.
@@ -708,9 +663,7 @@ async def test_a_re_attached_install_shows_progress_from_its_job_and_completes(
         "c1": job_events("[50/100] Compiling", status=None),
         "u1": job_events("Uploading: [==========] 100% Done...", status="completed"),
     }
-    entry = await _set_up_after_a_restart(
-        hass, url, hass_storage, wait=False, clean_build=True
-    )
+    entry = await _set_up_after_a_restart(hass, url, wait=False, clean_build=True)
     await asyncio.wait_for(fake.waiting.wait(), 1)
 
     await _wait_for_percentage(hass, 47)
@@ -731,6 +684,6 @@ async def test_a_re_attached_install_shows_progress_from_its_job_and_completes(
     assert state.state == STATE_OFF
     assert state.attributes["in_progress"] is False
     assert state.attributes["update_percentage"] is None
-    assert _recorded_version(hass_storage, entry) == "2026.10.1"
-    assert _active_jobs(hass_storage, entry) is None
+    assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
+    assert await _active_jobs(hass, entry) is None
     assert _notifications(hass) == []

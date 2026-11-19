@@ -21,6 +21,7 @@ from custom_components.esphome_git_updates.connection import protocol_issue_id
 from custom_components.esphome_git_updates.const import DOMAIN
 from fake_device_builder import FakeDeviceBuilder, serve, server_info
 from git_repo import GitRepo
+from stored_record import stored_record
 from tracked_config import CONFIGURATION, ENTITY_ID, OTA, install, set_up, tick
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
@@ -106,9 +107,9 @@ async def test_a_git_poll_interval_set_before_setup_is_used_from_the_start(
     assert _state(hass).attributes["latest_version"] == f"2026.10.1 (marsrelay {pushed[:7]})"
 
 
-def _installed_commits(hass_storage: dict[str, Any]) -> dict[str, str]:
-    commits: dict[str, str] = hass_storage[f"{DOMAIN}.tracked"]["data"]["installed_commits"]
-    return commits
+async def _installed_commit(hass: HomeAssistant, repo: GitRepo) -> str | None:
+    """The Installed Commit recorded for *repo*'s default branch."""
+    return (await stored_record(hass, "tracked")).installed_commit(f"{repo.url}@HEAD")
 
 
 async def test_an_install_records_the_latest_commits_read_again_when_it_was_pressed(
@@ -116,7 +117,6 @@ async def test_an_install_records_the_latest_commits_read_again_when_it_was_pres
     builder: FakeDeviceBuilder,
     marsrelay: GitRepo,
     freezer: FrozenDateTimeFactory,
-    hass_storage: dict[str, Any],
 ) -> None:
     await set_up(hass, builder)
     marsrelay.push()
@@ -127,7 +127,7 @@ async def test_an_install_records_the_latest_commits_read_again_when_it_was_pres
 
     await install(hass, builder, "install_clean_success")
 
-    assert _installed_commits(hass_storage) == {f"{marsrelay.url}@HEAD": pressed_for}
+    assert await _installed_commit(hass, marsrelay) == pressed_for
     assert _state(hass).state == STATE_OFF
     await tick(hass, freezer, 30.1)
     assert _state(hass).state == STATE_OFF
@@ -138,7 +138,6 @@ async def test_a_failed_install_records_no_commits(
     builder: FakeDeviceBuilder,
     marsrelay: GitRepo,
     freezer: FrozenDateTimeFactory,
-    hass_storage: dict[str, Any],
 ) -> None:
     seeded = marsrelay.latest_commit()
     await set_up(hass, builder)
@@ -148,7 +147,7 @@ async def test_a_failed_install_records_no_commits(
     with pytest.raises(HomeAssistantError):
         await install(hass, builder, "install_compile_failed")
 
-    assert _installed_commits(hass_storage) == {f"{marsrelay.url}@HEAD": seeded}
+    assert await _installed_commit(hass, marsrelay) == seeded
     assert _state(hass).state == STATE_ON
 
 
