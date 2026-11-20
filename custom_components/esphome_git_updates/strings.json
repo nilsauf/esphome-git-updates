@@ -1,0 +1,116 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Device Builder",
+        "description": "Where the ESPHome Device Builder runs.",
+        "menu_options": {
+          "addon": "ESPHome add-on (auto)",
+          "manual": "Manual URL"
+        }
+      },
+      "addon": {
+        "title": "ESPHome add-on",
+        "description": "Use the ESPHome add-on on this Home Assistant. If it can't be found by its slug, the Device Builder that Home Assistant's ESPHome integration discovered is used.",
+        "data": {
+          "addon_slug": "Add-on slug"
+        },
+        "data_description": {
+          "addon_slug": "Only change this if your ESPHome add-on comes from a non-standard repository."
+        }
+      },
+      "manual": {
+        "title": "Device Builder URL",
+        "description": "Where the ESPHome Device Builder runs.",
+        "data": {
+          "url": "URL",
+          "username": "Username",
+          "password": "Password"
+        },
+        "data_description": {
+          "url": "The Device Builder's base URL, for example http://192.168.1.10:6052.",
+          "username": "Only needed if the Device Builder asks for a login.",
+          "password": "Only needed if the Device Builder asks for a login."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate with the Device Builder",
+        "description": "The Device Builder for {name} refused the stored username or password. Enter the current credentials.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        },
+        "data_description": {
+          "username": "The username the Device Builder now expects.",
+          "password": "The password the Device Builder now expects."
+        }
+      },
+      "configuration": {
+        "title": "Tracked Config",
+        "description": "The ESPHome configuration to watch for updates.",
+        "data": {
+          "configuration": "Configuration"
+        }
+      },
+      "device": {
+        "title": "Linked Device",
+        "description": "The device {name} already has in Home Assistant, from the ESPHome or MQTT integration. The update entity is added to it, and the ESPHome version it reports is the installed one. Leave empty to give the update entity a device of its own.",
+        "data": {
+          "device_id": "Device"
+        }
+      }
+    },
+    "error": {
+      "addon_not_found": "Neither the ESPHome add-on with this slug nor a Device Builder discovered by Home Assistant's ESPHome integration was found.",
+      "cannot_connect": "Could not connect to the Device Builder.",
+      "invalid_auth": "The Device Builder refused the username or password.",
+      "unsupported_version": "This Device Builder version is not supported.",
+      "not_linkable_device": "Pick a device of the ESPHome or MQTT integration."
+    },
+    "abort": {
+      "already_configured": "This configuration is already tracked.",
+      "no_configurations": "The Device Builder has no configurations."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Install, polling and release notes options",
+        "data": {
+          "clean_build": "Clean Build",
+          "git_poll_interval": "Git poll interval",
+          "upload_address": "Upload address",
+          "github_token": "GitHub token"
+        },
+        "data_description": {
+          "clean_build": "Delete the build directory, locally and on connected remote build servers, before each compile. It does not fetch Git Sources again: that takes `refresh: always` in the YAML.",
+          "git_poll_interval": "How often, in minutes, the YAML is read again and each Git Source's latest commit is fetched.",
+          "upload_address": "Where to upload the firmware. OTA uploads over the air to the device's own address; give an IP address or hostname to upload there instead.",
+          "github_token": "Optional. Used to check GitHub Sources for Releases and to list their commits in the release notes; it raises GitHub's limit of 60 requests an hour. A fine-grained token with no permissions is enough for public repositories."
+        }
+      }
+    }
+  },
+  "issues": {
+    "unsupported_server_version": {
+      "title": "Unsupported Device Builder for {title}",
+      "description": "The Device Builder that compiles {title} reports version {server_version}, which ESPHome Git Updates does not support. Updates for {title} are paused until the Device Builder runs a supported version or this integration is updated."
+    },
+    "unexpected_frame": {
+      "title": "Unexpected answer from the Device Builder for {title}",
+      "description": "The Device Builder that compiles {title} sent something ESPHome Git Updates does not understand, so updates for {title} are paused. This usually means the Device Builder changed its protocol. Details: {error}"
+    },
+    "missing_ota": {
+      "title": "{title} cannot be updated over the air",
+      "description": "The YAML of {title} has no `ota:` entry with platform `esphome` or `web_server`, so ESPHome Git Updates refuses to install it. Add one, for example:\n\n```yaml\nota:\n  - platform: esphome\n```\n\nthen flash {title} once over USB so the running firmware accepts over-the-air updates. This issue clears once the YAML is read again."
+    },
+    "refresh_policy": {
+      "title": "Git Sources of {title} may be built from a stale cached clone",
+      "description": "These Git Sources of {title} lack `refresh: always`: {sources}. ESPHome reuses its cached clone of a Git Source until its refresh time runs out (1 day by default), so an Install could build an old commit while recording the new one. ESPHome Git Updates refuses to install {title} until each of them sets `refresh: always` (or `0s`), for example:\n\n```yaml\nexternal_components:\n  - source: github://owner/repo\n    refresh: always\n```\n\nRemote `packages:` take `refresh: always` too; a `github://` shorthand package cannot, so write it as a mapping with `url:`, `ref:`, `files:` and `refresh: always`. This issue clears once the YAML is read again."
+    },
+    "include_refused": {
+      "title": "Device Builder refused to read a file of {title}",
+      "description": "{title} includes {file}, but the Device Builder refused to read it ({error}). Without it, ESPHome Git Updates cannot see every Git Source of {title}, so their updates are not refreshed. This usually means the Device Builder now restricts which files can be read. If {file} was removed or renamed, fix the include in the YAML."
+    }
+  }
+}
