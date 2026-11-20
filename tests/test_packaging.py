@@ -40,6 +40,13 @@ def test_manifest_version_is_semver_and_matches_pyproject() -> None:
     assert pyproject["project"]["version"] == version
 
 
+def test_strings_json_is_the_source_of_truth_and_keeps_the_runtime_copy_in_step() -> None:
+    """The source of truth for the translation strings is strings.json; the runtime copy must not drift."""
+    strings = _load(INTEGRATION / "strings.json")
+    runtime_copy = _load(INTEGRATION / "translations" / "en.json")
+    assert strings == runtime_copy
+
+
 def test_no_owner_placeholder_remains() -> None:
     # The release workflow refuses to publish while the word OWNER appears in these files.
     for path in (INTEGRATION / "manifest.json", ROOT / "README.md"):
