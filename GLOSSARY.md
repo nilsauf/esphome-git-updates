@@ -22,6 +22,10 @@ _Avoid_: target, host
 The ESPHome add-on (or standalone server) that compiles and flashes firmware on the integration's behalf.
 _Avoid_: dashboard, ESPHome add-on, builder
 
+**Device Builder Location**:
+Where an entry's Device Builder is reached: the slug of the ESPHome add-on, or a URL with optional credentials. Changing it does not change the Tracked Config.
+_Avoid_: address, host (when the add-on counts too), connection (when meaning where the builder is)
+
 ### Sources and versions
 
 **Source**:
