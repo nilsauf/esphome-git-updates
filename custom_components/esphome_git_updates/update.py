@@ -20,11 +20,11 @@ from homeassistant.helpers.device_registry import DeviceInfo, EventDeviceRegistr
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_device_registry_updated_event
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from yarl import URL
 
 from .const import CONF_CONFIGURATION, DOMAIN
 from .coordinator import EsphomeGitUpdatesConfigEntry, EsphomeVersionCoordinator
 from .git_coordinator import GitSourcesCoordinator, install_error
+from .git_sources import without_userinfo
 from .install import (
     ActiveInstall,
     DeviceOffline,
@@ -58,7 +58,7 @@ def _configuration_url(location: Mapping[str, Any]) -> str | None:
     credentials; none for the add-on, whose ingress address is internal."""
     if not is_manual_location(location):
         return None
-    return str(URL(location[CONF_URL]).with_user(None))
+    return without_userinfo(location[CONF_URL])
 
 
 class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEntity):

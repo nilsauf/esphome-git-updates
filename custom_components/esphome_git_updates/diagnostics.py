@@ -21,9 +21,6 @@ from .options import CONF_GITHUB_TOKEN
 
 TO_REDACT = {CONF_USERNAME, CONF_PASSWORD, CONF_GITHUB_TOKEN}
 
-# The Installed Record's maps keyed by a Git Source's URL, which may carry credentials.
-_KEYED_BY_URL = ("installed_commits", "installed_tags", "commits", "tags")
-
 
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant, entry: EsphomeGitUpdatesConfigEntry
@@ -65,7 +62,7 @@ async def async_get_config_entry_diagnostics(
                 for source in runtime.git_coordinator.shown_sources()
             ],
         },
-        "installed_record": _record(runtime.record.diagnostics()),
+        "installed_record": runtime.record.diagnostics(),
         "linked_device_id": None
         if runtime.linked_device is None
         else runtime.linked_device.device_id,
@@ -76,25 +73,3 @@ def _address(url: str) -> str:
     """*url* reduced to its scheme, host and port: no userinfo, path or query."""
     parsed = URL(url)
     return str(URL.build(scheme=parsed.scheme, host=parsed.host or "", port=parsed.explicit_port))
-
-
-def _record(snapshot: dict[str, Any]) -> dict[str, Any]:
-    """The Installed Record's *snapshot* with the userinfo cut from every Git Source URL."""
-    cleaned = {
-        name: _without_userinfo_keys(value) if name in _KEYED_BY_URL else value
-        for name, value in snapshot.items()
-    }
-    if (active := cleaned.get("active_install")) is not None:
-        cleaned["active_install"] = _record(active)
-    return cleaned
-
-
-def _without_userinfo_keys(values: dict[str, str]) -> dict[str, str]:
-    return {_without_userinfo(key): value for key, value in values.items()}
-
-
-def _without_userinfo(url: str) -> str:
-    """*url* without any username and password; a URL without a scheme as it is."""
-    if "://" not in url:
-        return url
-    return str(URL(url).with_user(None))

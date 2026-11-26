@@ -15,6 +15,7 @@ from enum import Enum
 from typing import Any, NamedTuple
 
 import yaml
+from yarl import URL
 
 from .version_tags import is_version_tag
 
@@ -273,6 +274,14 @@ _Loader.add_constructor("tag:yaml.org,2002:float", _construct_str)
 _Loader.add_constructor("!secret", _construct_secret)
 _Loader.add_constructor("!include", _construct_include)
 _Loader.add_multi_constructor("!", _construct_tagged)
+
+
+def without_userinfo(url: str) -> str:
+    """*url* without any username and password, as shown to a user; a URL without
+    a scheme, such as a Git Source in scp-like form, as it is."""
+    if "://" not in url:
+        return url
+    return str(URL(url).with_user(None))
 
 
 class DiscoveryError(Exception):
