@@ -78,9 +78,6 @@ class ActiveInstall:
 # A notification's headline and message.
 Notification = tuple[str, str]
 
-# Every ending has a `summary` that completes "Install of <title> ...". The
-# entity fails the Install action with it for every ending but `Installed`.
-
 
 @dataclass(frozen=True)
 class Installed:
@@ -88,8 +85,6 @@ class Installed:
 
     # ESPHome's distinct warnings, in the order they first appeared.
     warnings: tuple[str, ...] = ()
-
-    summary = "succeeded"
 
     @property
     def notification(self) -> Notification | None:
@@ -108,10 +103,6 @@ class Failed:
     message: str
 
     @property
-    def summary(self) -> str:
-        return f"failed at {self.stage}: {self.error}"
-
-    @property
     def notification(self) -> Notification:
         return ("Install failed", self.message)
 
@@ -119,8 +110,6 @@ class Failed:
 @dataclass(frozen=True)
 class DeviceOffline:
     """The Device Builder would have deferred the Install; it was refused (spec step 4)."""
-
-    summary = "failed: device offline"
 
     @property
     def notification(self) -> Notification:
@@ -130,8 +119,6 @@ class DeviceOffline:
 @dataclass(frozen=True)
 class OutcomeUnknown:
     """A re-attached Install whose jobs the Device Builder no longer knows; nothing was recorded."""
-
-    summary = "has an unknown outcome"
 
     @property
     def notification(self) -> Notification:

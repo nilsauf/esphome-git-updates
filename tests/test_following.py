@@ -188,14 +188,14 @@ def versions(installed: str, offered: str, *releases: Release) -> ShownSource:
 
 def plan(snapshot: Snapshot) -> InstallPlan:
     """The Install *snapshot* plans over the air, without a clean build."""
-    plan_or_refusal = snapshot.install("OTA", False, "node")
+    plan_or_refusal = snapshot.install("OTA", False)
     assert isinstance(plan_or_refusal, InstallPlan), plan_or_refusal
     return plan_or_refusal
 
 
 def refusal(snapshot: Snapshot) -> Refusal:
     """Why *snapshot* refuses an Install over the air, without a clean build."""
-    plan_or_refusal = snapshot.install("OTA", False, "node")
+    plan_or_refusal = snapshot.install("OTA", False)
     assert isinstance(plan_or_refusal, Refusal), plan_or_refusal
     return plan_or_refusal
 
@@ -870,7 +870,7 @@ async def test_an_install_rewrites_the_files_as_its_poll_read_them() -> None:
 
     snapshot = await tracked.poll(read)
 
-    assert snapshot.install("192.168.1.2", True, "node") == InstallPlan(
+    assert snapshot.install("192.168.1.2", True) == InstallPlan(
         {},
         "192.168.1.2",
         True,
@@ -941,20 +941,15 @@ def without_ota(yaml: str) -> str:
     return yaml.replace("ota:\n  - platform: esphome\n", "")
 
 
-NO_OTA = (
-    "its YAML has no `ota:` platform `esphome` or `web_server`, so it cannot be "
-    "updated over the air; flash it once over USB with OTA enabled"
-)
+OTA_PLATFORMS = "`esphome` or `web_server`"
 
 
-def refused(*reasons: str) -> Refusal:
-    return Refusal(f"Install of node refused: {'; and '.join(reasons)}. See Repairs.")
+def no_ota() -> Refusal:
+    return Refusal("install_refused_missing_ota", {"platforms": OTA_PLATFORMS})
 
 
-def stale(names: str) -> str:
-    return (
-        f"the Git Sources {names} lack `refresh: always`, so ESPHome may build a stale cached clone"
-    )
+def stale(sources: str) -> Refusal:
+    return Refusal("install_refused_refresh_policy", {"sources": sources})
 
 
 async def test_an_install_without_ota_is_refused_naming_the_ota_platforms() -> None:
@@ -963,7 +958,7 @@ async def test_an_install_without_ota_is_refused_naming_the_ota_platforms() -> N
 
     snapshot = await tracked.poll(without_ota(on_ref("dev")))
 
-    assert refusal(snapshot) == refused(NO_OTA)
+    assert refusal(snapshot) == no_ota()
     assert snapshot.check.ota_missing
 
 
@@ -978,7 +973,7 @@ async def test_an_install_whose_ota_a_remote_package_may_add_is_not_refused() ->
 
     snapshot = await tracked.poll(package + without_ota(on_ref("dev")))
 
-    assert isinstance(snapshot.install("OTA", False, "node"), InstallPlan)
+    assert isinstance(snapshot.install("OTA", False), InstallPlan)
 
 
 async def test_an_install_of_a_floating_ref_without_refresh_always_is_refused_naming_it() -> None:
@@ -990,7 +985,7 @@ async def test_an_install_of_a_floating_ref_without_refresh_always_is_refused_na
         config(source("dev", refresh="1d"), source("v1.0.0", url=OTHER, refresh="1d"))
     )
 
-    assert refusal(snapshot) == refused(stale("marsrelay"))
+    assert refusal(snapshot) == stale("marsrelay")
     assert snapshot.check.wrong_refresh_policy == (GitSource("marsrelay", URL, "dev"),)
 
 
@@ -1000,7 +995,7 @@ async def test_an_install_of_a_tag_that_is_no_version_tag_needs_refresh_always()
 
     snapshot = await tracked.poll(on_ref("stable").replace("    refresh: always\n", ""))
 
-    assert refusal(snapshot) == refused(stale("marsrelay"))
+    assert refusal(snapshot) == stale("marsrelay")
 
 
 async def test_an_install_of_a_tag_ref_needs_no_refresh_policy() -> None:
@@ -1009,7 +1004,7 @@ async def test_an_install_of_a_tag_ref_needs_no_refresh_policy() -> None:
 
     snapshot = await tracked.poll(on_ref("v1.0.0").replace("    refresh: always\n", ""))
 
-    assert isinstance(snapshot.install("OTA", False, "node"), InstallPlan)
+    assert isinstance(snapshot.install("OTA", False), InstallPlan)
 
 
 async def test_an_unset_ref_needs_refresh_always_only_while_it_follows_its_latest_commit() -> None:
@@ -1019,12 +1014,12 @@ async def test_an_unset_ref_needs_refresh_always_only_while_it_follows_its_lates
     tracked.remote.tag(URL, "stable", "c1")
     unset = on_ref(None).replace("    refresh: always\n", "")
     snapshot = await tracked.poll(unset)
-    assert refusal(snapshot) == refused(stale("marsrelay"))
+    assert refusal(snapshot) == stale("marsrelay")
 
     tracked.remote.tag(URL, "v1.4.0", "c2")
     snapshot = await tracked.poll()
 
-    assert isinstance(snapshot.install("OTA", False, "node"), InstallPlan)
+    assert isinstance(snapshot.install("OTA", False), InstallPlan)
     assert snapshot.check.wrong_refresh_policy == ()
 
 
@@ -1037,7 +1032,10 @@ async def test_an_install_failing_several_checks_is_refused_naming_every_reason(
         without_ota(config(source("dev", refresh="1d"), source("dev", url=OTHER, refresh="1d")))
     )
 
-    assert refusal(snapshot) == refused(NO_OTA, stale("marsrelay, sensors"))
+    assert refusal(snapshot) == Refusal(
+        "install_refused_missing_ota_and_refresh_policy",
+        {"platforms": OTA_PLATFORMS, "sources": "marsrelay, sensors"},
+    )
 
 
 async def test_a_check_is_of_its_own_poll_not_a_later_one() -> None:

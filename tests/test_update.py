@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -17,6 +19,9 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
     device_registry as dr,
+)
+from homeassistant.helpers import (
+    entity_platform,
 )
 from homeassistant.helpers import (
     entity_registry as er,
@@ -45,6 +50,7 @@ from stored_record import record_an_install, recorded_esphome_version, stored_re
 from tracked_config import OTA
 
 ENTITY_ID = "update.host_node_firmware"
+INTEGRATION = Path(__file__).resolve().parent.parent / "custom_components" / DOMAIN
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -104,6 +110,17 @@ async def test_the_add_on_ingress_port_is_looked_up_again_when_the_entry_is_set_
     state = hass.states.get(ENTITY_ID)
     assert state is not None
     assert state.attributes["latest_version"] == "2026.11.0"
+
+
+async def test_the_update_platform_declares_no_parallel_update_limit(
+    hass: HomeAssistant, builder: tuple[str, FakeDeviceBuilder]
+) -> None:
+    """Polling is the coordinators' job and Installs are serialized by the Install runner."""
+    await _set_up(hass, builder[0])
+
+    [platform] = entity_platform.async_get_platforms(hass, DOMAIN)
+    assert platform.domain == "update"
+    assert getattr(platform.platform, "PARALLEL_UPDATES", None) == 0
 
 
 async def test_a_new_entry_assumes_the_device_runs_the_available_version(
@@ -200,6 +217,25 @@ async def test_a_changed_location_shows_on_the_device_after_the_reload(
     [device] = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
     assert new_url != old_url
     assert device.configuration_url == new_url
+
+
+async def test_the_entity_carries_the_translation_key_its_icon_definitions_use(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    entity_registry: er.EntityRegistry,
+) -> None:
+    url, _ = builder
+    await _set_up(hass, url)
+
+    entity = entity_registry.async_get(ENTITY_ID)
+    assert entity is not None
+    assert entity.translation_key == "firmware"
+    icons = json.loads((INTEGRATION / "icons.json").read_text())
+    assert entity.translation_key in icons["entity"]["update"]
+    # Still named by its device class, which the update component translates.
+    state = hass.states.get(ENTITY_ID)
+    assert state is not None
+    assert state.attributes["friendly_name"] == "host-node Firmware"
 
 
 async def test_an_update_is_offered_when_the_available_version_differs_from_the_installed_one(
@@ -393,8 +429,19 @@ async def test_a_failed_compile_notifies_with_the_stage_error_and_log_tail_and_r
     entry = await _set_up_with_an_update(hass, url)
     fake.transcript = install_transcript("install_compile_failed")
 
-    with pytest.raises(HomeAssistantError, match="compile"):
+    with pytest.raises(HomeAssistantError, match="compile") as failed:
         await _install(hass)
+
+    assert failed.value.translation_domain == DOMAIN
+    assert failed.value.translation_key == "install_failed"
+    assert failed.value.translation_placeholders == {
+        "title": "host-node",
+        "stage": "compile",
+        "error": "compile failed (exit code 1)",
+    }
+    assert str(failed.value) == (
+        "Install of host-node failed at compile: compile failed (exit code 1)"
+    )
 
     assert fake.mismatches == []
     state = hass.states.get(ENTITY_ID)
@@ -480,8 +527,13 @@ async def test_an_install_the_device_builder_defers_for_an_offline_device_fails_
     # Captured: the deferred compile is cancelled and the queued update cleared.
     fake.transcript = install_transcript("install_deferred_at_enqueue")
 
-    with pytest.raises(HomeAssistantError, match="device offline"):
+    with pytest.raises(HomeAssistantError, match="device offline") as failed:
         await _install(hass)
+
+    assert failed.value.translation_domain == DOMAIN
+    assert failed.value.translation_key == "install_failed_device_offline"
+    assert failed.value.translation_placeholders == {"title": "host-node"}
+    assert str(failed.value) == "Install of host-node failed: device offline"
 
     assert fake.mismatches == []
     assert fake.finished
@@ -564,6 +616,28 @@ async def test_an_install_interrupted_by_a_restart_is_re_attached_and_recorded(
     assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
     assert await _active_jobs(hass, entry) is None
     assert _notifications(hass) == []
+
+
+async def test_an_install_action_waiting_when_home_assistant_stops_fails_as_interrupted(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url)
+    fake.transcript = queue_install("c1", "u1")
+    fake.jobs = {"c1": job_events("INFO Compiling", status=None)}
+    action = hass.async_create_task(_install(hass))
+    await fake.running.wait()
+
+    # Home Assistant stops while the compile runs on.
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    with pytest.raises(HomeAssistantError, match="interrupted") as interrupted:
+        await action
+    assert interrupted.value.translation_domain == DOMAIN
+    assert interrupted.value.translation_key == "install_interrupted"
+    assert interrupted.value.translation_placeholders == {"title": "host-node"}
 
 
 async def _set_up_after_a_restart(
