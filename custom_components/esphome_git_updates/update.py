@@ -32,7 +32,6 @@ from .install import (
     Installed,
     InstallEnding,
     InstallRunner,
-    OutcomeUnknown,
 )
 from .installed_record import InstalledRecord
 from .linked_device import LinkedDevice
@@ -180,12 +179,14 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         except BaseException:
             self._set_state(False, None)
             raise
-        task = self._start(lambda: self._runner.run(plan, self._set_percentage), reattached=False)
+        task = self._start(lambda: self._runner.run(plan, self._set_percentage))
         # Not awaited directly: cancelling the action must not cancel the Install.
         await asyncio.wait([task])
         if task.cancelled():
             raise self._error("install_interrupted")
-        task.result()
+        ending = task.result()
+        if not isinstance(ending, Installed):
+            raise self._ending_error(ending)
 
     def _set_state(self, in_progress: bool, percentage: int | None) -> None:
         """Write both Install attributes in one state change."""
@@ -198,11 +199,10 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
 
     def _reattach(self, active: ActiveInstall) -> None:
         """Finish the Install that was running when Home Assistant stopped (ADR-0002)."""
-        self._start(lambda: self._runner.reattach(active, self._set_percentage), reattached=True)
+        # Nobody waits for it: its notification says how it went.
+        self._start(lambda: self._runner.reattach(active, self._set_percentage))
 
-    def _start(
-        self, run: Callable[[], Awaitable[InstallEnding]], *, reattached: bool
-    ) -> asyncio.Task[None]:
+    def _start[E: InstallEnding](self, run: Callable[[], Awaitable[E]]) -> asyncio.Task[E]:
         """Run an Install as a task of the entry.
 
         Unloading the entry, as stopping Home Assistant does, cancels the task
@@ -211,11 +211,12 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         self._set_state(True, 0)
         return self._entry.async_create_background_task(
             self.hass,
-            self._install(run, reattached),
+            self._install(run),
             f"{DOMAIN} install {self._entry.title}",
         )
 
-    async def _install(self, run: Callable[[], Awaitable[InstallEnding]], reattached: bool) -> None:
+    async def _install[E: InstallEnding](self, run: Callable[[], Awaitable[E]]) -> E:
+        """Run an Install to its end, then tell its outcome through a notification."""
         try:
             ending = await run()
         except asyncio.CancelledError:
@@ -230,19 +231,15 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
             persistent_notification.async_dismiss(self.hass, self._notification_id)
         else:
             self._notify(*ending.notification)
-        # Nobody waits for a re-attached Install: its notification says how it went.
-        if not isinstance(ending, Installed) and not reattached:
-            raise self._ending_error(ending)
+        return ending
 
-    def _ending_error(self, ending: Failed | DeviceOffline | OutcomeUnknown) -> HomeAssistantError:
+    def _ending_error(self, ending: Failed | DeviceOffline) -> HomeAssistantError:
         """The translated error failing the Install action with *ending*."""
         match ending:
             case Failed(stage=stage, error=error):
                 return self._error("install_failed", {"stage": str(stage), "error": error})
             case DeviceOffline():
                 return self._error("install_failed_device_offline")
-            case OutcomeUnknown():
-                return self._error("install_outcome_unknown")
             case _:
                 assert_never(ending)
 

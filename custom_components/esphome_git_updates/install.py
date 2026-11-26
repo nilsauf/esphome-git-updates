@@ -125,7 +125,9 @@ class OutcomeUnknown:
         return ("Install outcome unknown", OUTCOME_UNKNOWN_TEXT)
 
 
-InstallEnding = Installed | Failed | DeviceOffline | OutcomeUnknown
+# How an Install started now ends; only a re-attached one can end with its outcome unknown.
+FreshInstallEnding = Installed | Failed | DeviceOffline
+InstallEnding = FreshInstallEnding | OutcomeUnknown
 
 
 class InstallBookkeeping(Protocol):
@@ -195,7 +197,9 @@ class InstallRunner:
         self._session = session
         self._bookkeeping = bookkeeping
 
-    async def run(self, plan: InstallPlan, on_percentage: Callable[[int], None]) -> InstallEnding:
+    async def run(
+        self, plan: InstallPlan, on_percentage: Callable[[int], None]
+    ) -> FreshInstallEnding:
         """Run an Install: write the plan's rewrites, then an optional Clean Build,
         then compile, then upload."""
 
@@ -225,7 +229,14 @@ class InstallRunner:
             )
 
         first_stage = active.jobs[0].stage
-        return await self._follow(active.plan, first_stage, start, on_percentage, reattached=True)
+        try:
+            return await self._follow(
+                active.plan, first_stage, start, on_percentage, reattached=True
+            )
+        except JobNotFound:
+            # Its jobs were pruned while Home Assistant was down.
+            await self._bookkeeping.async_clear_active_install()
+            return OutcomeUnknown()
 
     async def _follow(
         self,
@@ -235,7 +246,9 @@ class InstallRunner:
         on_percentage: Callable[[int], None],
         *,
         reattached: bool,
-    ) -> InstallEnding:
+    ) -> FreshInstallEnding:
+        """Follow an Install to its end. A re-attached one whose jobs the Device
+        Builder no longer knows raises `JobNotFound`."""
         observer = _Observer(self._bookkeeping, plan, on_percentage)
         log = observer.log
         try:
@@ -251,9 +264,7 @@ class InstallRunner:
                 esphome_version = client.esphome_version
         except JobNotFound as err:
             if reattached:
-                # Its jobs were pruned while Home Assistant was down.
-                await self._bookkeeping.async_clear_active_install()
-                return OutcomeUnknown()
+                raise
             return await self._failed(log, log.stage, str(err))
         except (DeviceBuilderUnavailable, CommandFailed) as err:
             return await self._failed(log, log.stage, str(err))

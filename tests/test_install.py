@@ -125,6 +125,7 @@ async def _run(
         fake.jobs = jobs or {}
         session = FakeSession(url)
         runner = InstallRunner(CONFIGURATION, session, bookkeeping)
+        ending: InstallEnding
         if reattach is None:
             ending = await runner.run(plan, percentages.append)
         else:

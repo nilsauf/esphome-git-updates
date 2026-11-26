@@ -147,9 +147,6 @@
     "install_failed_device_offline": {
       "message": "Install of {title} failed: device offline"
     },
-    "install_outcome_unknown": {
-      "message": "Install of {title} has an unknown outcome"
-    },
     "device_builder_unavailable": {
       "message": "Cannot poll the Device Builder for {title}: {error}"
     },
