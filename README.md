@@ -198,6 +198,87 @@ actions:
       message: "{{ trigger.notification.message }}"
 ```
 
+## Supported Configurations
+
+The integration tracks Configurations: the device YAML files the Device Builder lists. A Configuration is supported when it meets all of these requirements (each is explained under [Requirements on the Configuration](#requirements-on-the-configuration)):
+
+- **It has an OTA platform.** The YAML has an `ota:` entry with `platform: esphome` or `platform: web_server`, and the firmware running on the device was built with it. Without one, Installs are refused.
+- **Every Git Source that follows commits sets `refresh: always`** (or `0s`). This applies to a Floating Ref, and to an Unset Ref while its repository has no Releases and no Version Tags. A Tag Ref, an Unset Ref following versions and a Pinned Ref need no Refresh Policy. Without it, Installs are refused.
+- **Its Git Sources are `external_components` or remote `packages:`** that point at a git repository: a `source:` of `type: git`, a `github://` shorthand, or a remote package with `url:`. They may be written in the device YAML or in a file it pulls in with `!include` or local `packages:`.
+
+A Configuration with no Git Sources is supported too: it gets updates when the Device Builder's ESPHome version changes.
+
+Out of scope:
+
+- **Devices whose firmware is not built from a Configuration the Device Builder lists**, such as firmware built with the ESPHome command line elsewhere, or a device whose YAML lives outside the Device Builder's configuration directory. Only Configurations the Device Builder lists can be picked during setup.
+- **Firmware files read from disk.** The integration never uploads a prebuilt `.bin`; every Install compiles the Configuration through the Device Builder.
+- **Dependencies that are not git**, such as `external_components` of `type: local`, PlatformIO `libraries:`, or ESPHome's own components. Only the ESPHome version stands for those: they update when the Device Builder's ESPHome version changes.
+
+## Known limitations
+
+- **One config entry per Configuration.** Each Tracked Config is its own entry with one update entity ([ADR-0001](docs/adr/0001-generic-per-config-integration.md)). Add the integration once per Configuration; adding the same Configuration twice is refused.
+- **OTA is required.** Installs are only flashed over the air. A device whose running firmware has never had an `ota:` platform must be flashed once over USB (for example from the Device Builder) with one before this integration can update it.
+- **`refresh: always` is required for a Git Source that follows commits** (a Floating Ref, or an Unset Ref following its Latest Commit). ESPHome would otherwise build its cached clone, up to a day old by default, and a Clean Build does not refetch Git Sources ([ADR-0004](docs/adr/0004-require-refresh-always.md)). A `github://` shorthand remote package cannot take `refresh:`; write it as a mapping with `url:`, `ref:`, `files:` and `refresh: always`.
+- **Some refs cannot be tracked.** A Tag Ref is skipped, and logged as a warning (`a Git Source cannot be tracked: ...`), when its text cannot be rewritten without changing something else: a substitution that is used elsewhere or defined more than once, a ref that comes from an include's `vars:`, a ref built from several parts (such as `v${major}.${minor}`), or a repository referred to at two different refs. Write the ref as plain text, or in a substitution used only for that ref. A Git Source whose URL or ref depends on a `!secret`, and files pulled in with `!include_dir_*`, are skipped the same way. An Unset Ref written in a flow-style mapping (`{type: git, url: ...}`) or referred to in several places cannot follow versions, as no ref can be inserted safely; it follows its Latest Commit instead (and then needs `refresh: always`). Write it in block style, or give it a ref.
+- **Git Sources inside a remote package are not seen.** The files of a remote `packages:` entry are not read, so only the package itself is tracked, not the `external_components` it declares ([ADR-0006](docs/adr/0006-parse-raw-yaml-not-resolved-config.md)). An `ota:` that only a remote package adds is not known either; then Installs are not refused for a missing OTA platform.
+- **A Deferred Install is refused.** When the device is offline, the Device Builder would keep the firmware and flash it once the device comes back. The integration never lets it: the queued update is cleared, nothing is installed, and the Install fails with "device offline". Install again once the device is online.
+- **An offline Linked Device is refused.** When every other entity of the Linked Device is unavailable, Install is refused before anything is compiled. A Linked Device with no other entities is never taken to be offline.
+- **Only what the Device Builder lists is visible.** Setup offers only the Configurations the Device Builder lists, and every file is read through the Device Builder. If it refuses to read an included file, the Git Sources in it are not refreshed (see the *Device Builder refused to read a file* Repair issue below).
+- **A Tag Ref is rewritten in the YAML on Install.** Installing a newer Version Tag writes it into the YAML through the Device Builder before compiling, wherever the ref is written, including an `!include`d file or a substitution ([ADR-0007](docs/adr/0007-install-rewrites-tag-refs.md)). The first Install of a newer version for an Unset Ref adds a ref. If the file changed since it was read, the Install is refused rather than overwriting your edit.
+
+## Troubleshooting
+
+### Repair issues
+
+Each Repair issue names the Tracked Config in its title. The pre-install checks are re-run on every Git poll (every 30 minutes by default) and at every Install, so an issue clears once the YAML is fixed and read again; to clear it sooner, change the Git poll interval option, which polls right away, or reload the entry.
+
+- ***\<title\> cannot be updated over the air*** (missing OTA). The YAML has no `ota:` entry with platform `esphome` or `web_server`, and Installs are refused. Add one:
+
+  ```yaml
+  ota:
+    - platform: esphome
+  ```
+
+  If the device has never run firmware with OTA, flash it once over USB (for example from the Device Builder).
+- ***Git Sources of \<title\> may be built from a stale cached clone*** (Refresh Policy). The Git Sources it names follow commits but lack `refresh: always`, and Installs are refused. Add `refresh: always` (or `0s`) to each, next to its `source:` for `external_components` or inside the remote package's mapping. Turn a `github://` shorthand remote package into a mapping with `url:`, `ref:`, `files:` and `refresh: always`.
+- ***Unsupported Device Builder for \<title\>***. The Device Builder reports a version this integration does not support, so updates for the Tracked Config pause and the update entity is unavailable. Update the ESPHome add-on or Device Builder, or update this integration. The issue clears on the next poll that the Device Builder answers as expected.
+- ***Unexpected answer from the Device Builder for \<title\>***. The Device Builder sent something this integration does not understand, usually because its protocol changed; updates pause, and the issue shows the details. Update this integration or the Device Builder; if both are current, open an issue with the details and the diagnostics.
+- ***Device Builder refused to read a file of \<title\>*** (refused include). The Configuration includes a file the Device Builder refused to read, so its Git Sources are not refreshed. If the file was removed or renamed, fix the `!include` or local package in the YAML. If it exists, the Device Builder probably restricts which files can be read; open an issue with the diagnostics.
+
+The last three share one Repair issue per Tracked Config, which shows one problem at a time.
+
+### Waiting for credentials, reauthentication and reconfigure
+
+When a Device Builder reached by URL rejects the stored username or password, the integration logs a warning that it is asking for new credentials and pausing polls, stops connecting to the Device Builder (polls fail with `waiting for new Device Builder credentials`), makes the update entity unavailable, and Home Assistant shows **Re-authenticate** for the entry under **Settings → Devices & services**. Retrying would only get the Device Builder to answer with a rate limit, so nothing is tried until you act. An entry using the add-on has no credentials to re-enter: a rejected login is logged as an error and polling continues.
+
+- **Reauthentication** asks only for the new username and password, checks them against the same Device Builder, saves them and reloads the entry. Use it when the Device Builder's login changed.
+- **Reconfigure** (the entry's ⋮ menu → **Reconfigure**) changes the Device Builder Location itself: a new URL, new credentials, or a switch between the add-on and a URL. The new location is tested and must list the Tracked Config's Configuration. Saving reloads the entry, which also ends a wait for credentials. Use it when the Device Builder moved.
+
+Both keep the Tracked Config, its entity and its Installed Record.
+
+### The update entity is unavailable
+
+The entity is unavailable while the Device Builder's ESPHome version cannot be polled (every 5 minutes):
+
+- the Device Builder cannot be reached: it is stopped or restarting, its URL is wrong, or the add-on cannot be found;
+- the entry is waiting for new credentials (see above);
+- the Device Builder reports an unsupported version or sends an unexpected answer (see the Repair issues above).
+
+It becomes available again with the next poll that succeeds. If the Device Builder cannot be reached when the integration is set up, Home Assistant retries the setup later. A Git poll that fails (an unreadable YAML, an unreachable git remote or GitHub) does not make the entity unavailable: it keeps what the last good poll showed and logs why. If the Device Builder moved, use **Reconfigure**.
+
+### Diagnostics
+
+To attach diagnostics to an issue, go to **Settings → Devices & services → ESPHome Git Updates**, open the entry's ⋮ menu and choose **Download diagnostics**. The download works while the Device Builder is unreachable. It contains:
+
+- the entry's title, unique ID, data and options;
+- the Device Builder Location: whether it is the add-on or a URL, and the add-on slug or the URL's scheme, host and port;
+- the Available ESPHome Version and whether its last poll succeeded;
+- whether the last Git poll succeeded, and each tracked Git Source with its installed and latest commit or tag and, for GitHub, the number of commits between them;
+- the Installed Record: the Installed ESPHome Version, Installed Commits and Installed Tags, and the Install still running, if any;
+- the Linked Device's device ID.
+
+Redacted: the username, password and GitHub token; the Device Builder URL is cut to its scheme, host and port, and any username or password in a Git Source URL is removed. The YAML is not included.
+
 ## Releasing
 
 One-time setup: give the GitHub repository a description, topics, and enabled issues. HACS validation fails without them.
