@@ -6,6 +6,7 @@ and it is read from memory, so it works while the Device Builder is unreachable.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import MagicMock
 
@@ -20,7 +21,9 @@ from pytest_homeassistant_custom_component.components.diagnostics import (
 from pytest_homeassistant_custom_component.typing import ClientSessionGenerator
 
 from custom_components.esphome_git_updates.const import DOMAIN
-from fake_device_builder import port_of, serve, server_info
+from custom_components.esphome_git_updates.device_builder import ActiveJob, Stage
+from custom_components.esphome_git_updates.install import ActiveInstall, InstallPlan
+from fake_device_builder import job_events, port_of, serve, server_info
 from fake_github import GITHUB_URL, FakeGitHub
 from git_repo import GitRepo
 from stored_record import record_an_install
@@ -176,3 +179,54 @@ async def test_diagnostics_of_an_add_on_entry_name_the_add_on(
     }
     assert diagnostics["git_sources"] == {"last_update_success": True, "shown": []}
     assert diagnostics["linked_device_id"] is None
+
+
+async def test_diagnostics_of_a_running_install_show_its_plan_without_git_credentials(
+    hass: HomeAssistant, hass_client: ClientSessionGenerator
+) -> None:
+    # A Git Source in scp-like form has no scheme, so no userinfo to cut.
+    scp_url = "git@git.example.com:nilsauf/relaykit.git"
+    record = await record_an_install(hass, "tracked", "2026.9.0")
+    await record.async_set_active_install(
+        ActiveInstall(
+            (ActiveJob("c1", Stage.COMPILE), ActiveJob("u1", Stage.UPLOAD)),
+            InstallPlan(
+                {f"{PRIVATE_URL}@HEAD": "beef00", f"{scp_url}@HEAD": "decade"}, "OTA", False
+            ),
+        )
+    )
+    async with serve(
+        [server_info(esphome_version="2026.10.1")],
+        {CONFIGURATION: f"esphome:\n  name: host-node\n{OTA}"},
+    ) as (_, fake):
+        # The Install re-attached after the restart is still compiling.
+        compiled = asyncio.Event()
+        fake.waits = {"c1": compiled}
+        fake.jobs = {"c1": job_events("[50/100] Compiling", status=None)}
+        await set_up(hass, fake)
+        await asyncio.wait_for(fake.waiting.wait(), 1)
+
+        diagnostics = await get_diagnostics_for_config_entry(
+            hass, hass_client, hass.config_entries.async_get_entry("tracked")
+        )
+
+        fake.jobs["c1"] = job_events("[100/100] Linking firmware.elf", status="failed")
+        compiled.set()
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    assert GIT_PASSWORD not in json.dumps(diagnostics)
+    assert diagnostics["installed_record"] == {
+        "installed_esphome_version": "2026.9.0",
+        "installed_commits": {},
+        "installed_tags": {},
+        "active_install": {
+            "jobs": [{"job_id": "c1", "stage": "compile"}, {"job_id": "u1", "stage": "upload"}],
+            "commits": {
+                "https://git.example.com/nilsauf/relaykit.git@HEAD": "beef00",
+                f"{scp_url}@HEAD": "decade",
+            },
+            "port": "OTA",
+            "clean_build": False,
+            "tags": {},
+        },
+    }
