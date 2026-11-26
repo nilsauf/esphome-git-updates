@@ -4,7 +4,8 @@ hassfest validates `quality_scale.yaml` for core integrations only, so this
 repository checks it: every rule is listed once with a status, every exemption
 says why, the manifest declares the tier the file earns, and the evidence each
 locally checkable rule needs is still there. Documentation rules are reviewed
-by a human, not asserted here.
+by a human, not asserted here. The translations' evidence, strings.json and
+its runtime copy agreeing, is pinned in `test_packaging.py`.
 """
 
 from __future__ import annotations
@@ -216,9 +217,3 @@ def test_strict_typing_evidence_ci_type_checks_the_standalone_cli_strictly() -> 
         run.startswith("mypy ") and "--strict" in run and "scripts/device_builder_cli.py" in run
         for run in runs
     )
-
-
-def test_translation_evidence_strings_and_the_runtime_copy_agree() -> None:
-    strings = json.loads((INTEGRATION / "strings.json").read_text())
-    runtime_copy = json.loads((INTEGRATION / "translations" / "en.json").read_text())
-    assert strings == runtime_copy
