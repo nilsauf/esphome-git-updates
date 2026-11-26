@@ -14,6 +14,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.esphome_git_updates.const import DOMAIN
 from fake_device_builder import FakeDeviceBuilder, serve, server_info
 from stored_record import recorded_esphome_version
 from tracked_config import CONFIGURATION, ENTITY_ID, OTA, install, press_install, set_up
@@ -124,9 +125,12 @@ async def test_a_linked_device_whose_entities_are_all_unavailable_refuses_the_in
     builder.transcript = []
     reads = len(builder.reads)
 
-    with pytest.raises(HomeAssistantError, match="device offline"):
+    with pytest.raises(HomeAssistantError, match="device offline") as refused:
         await press_install(hass)
 
+    assert refused.value.translation_domain == DOMAIN
+    assert refused.value.translation_key == "install_refused_device_offline"
+    assert refused.value.translation_placeholders == {"title": "host-node"}
     assert builder.mismatches == []
     # Refused before reading the YAML: no `devices/get_config` reached the Device Builder.
     assert builder.reads[reads:] == []

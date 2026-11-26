@@ -283,9 +283,11 @@ def _plan_install(
 
 @dataclass(frozen=True)
 class Refusal:
-    """Why an Install is refused, as the user is told."""
+    """Why an Install is refused: the translation key of the message the user is
+    told, and its placeholders. The raise site adds the entry's title."""
 
-    message: str
+    translation_key: str
+    placeholders: Mapping[str, str]
 
 
 @dataclass(frozen=True)
@@ -306,24 +308,21 @@ class PreInstallCheck:
     def wrong_refresh_policy_names(self) -> str:
         return ", ".join(source.name for source in self.wrong_refresh_policy)
 
-    def refusal(self, title: str) -> Refusal | None:
-        """Why an Install of *title* is refused, every failed check named; None if it
-        may go ahead."""
-        reasons = []
+    def refusal(self) -> Refusal | None:
+        """Why an Install is refused, every failed check named; None if it may go ahead."""
+        platforms = " or ".join(f"`{platform}`" for platform in OTA_PLATFORMS)
+        if self.ota_missing and self.wrong_refresh_policy:
+            return Refusal(
+                "install_refused_missing_ota_and_refresh_policy",
+                {"platforms": platforms, "sources": self.wrong_refresh_policy_names},
+            )
         if self.ota_missing:
-            platforms = " or ".join(f"`{platform}`" for platform in OTA_PLATFORMS)
-            reasons.append(
-                f"its YAML has no `ota:` platform {platforms}, so it cannot be "
-                "updated over the air; flash it once over USB with OTA enabled"
-            )
+            return Refusal("install_refused_missing_ota", {"platforms": platforms})
         if self.wrong_refresh_policy:
-            reasons.append(
-                f"the Git Sources {self.wrong_refresh_policy_names} lack `refresh: always`, "
-                "so ESPHome may build a stale cached clone"
+            return Refusal(
+                "install_refused_refresh_policy", {"sources": self.wrong_refresh_policy_names}
             )
-        if not reasons:
-            return None
-        return Refusal(f"Install of {title} refused: {'; and '.join(reasons)}. See Repairs.")
+        return None
 
 
 @dataclass(frozen=True)
@@ -344,15 +343,15 @@ class Snapshot:
     # The installed record, read when asked.
     record: InstalledVersions = field(compare=False, repr=False)
 
-    def install(self, port: str, clean_build: bool, title: str) -> InstallPlan | Refusal:
-        """An Install of *title* as this poll showed it, or why it is refused.
+    def install(self, port: str, clean_build: bool) -> InstallPlan | Refusal:
+        """An Install as this poll showed it, or why it is refused.
 
         The Install records the Latest Commits and versions this poll showed
         (ADR-0003), after moving each ref to the version shown (ADR-0007) in the
         files as this poll read them; each against the installed record as it is
         now, so an Install recorded since rewrites nothing.
         """
-        if (refusal := self.check.refusal(title)) is not None:
+        if (refusal := self.check.refusal()) is not None:
             return refusal
         return _plan_install(self.followed.values(), self.record, self.files, port, clean_build)
 

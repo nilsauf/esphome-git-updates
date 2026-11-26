@@ -343,8 +343,19 @@ async def test_a_failed_compile_notifies_with_the_stage_error_and_log_tail_and_r
     entry = await _set_up_with_an_update(hass, url)
     fake.transcript = install_transcript("install_compile_failed")
 
-    with pytest.raises(HomeAssistantError, match="compile"):
+    with pytest.raises(HomeAssistantError, match="compile") as failed:
         await _install(hass)
+
+    assert failed.value.translation_domain == DOMAIN
+    assert failed.value.translation_key == "install_failed"
+    assert failed.value.translation_placeholders == {
+        "title": "host-node",
+        "stage": "compile",
+        "error": "compile failed (exit code 1)",
+    }
+    assert str(failed.value) == (
+        "Install of host-node failed at compile: compile failed (exit code 1)"
+    )
 
     assert fake.mismatches == []
     state = hass.states.get(ENTITY_ID)
@@ -430,8 +441,13 @@ async def test_an_install_the_device_builder_defers_for_an_offline_device_fails_
     # Captured: the deferred compile is cancelled and the queued update cleared.
     fake.transcript = install_transcript("install_deferred_at_enqueue")
 
-    with pytest.raises(HomeAssistantError, match="device offline"):
+    with pytest.raises(HomeAssistantError, match="device offline") as failed:
         await _install(hass)
+
+    assert failed.value.translation_domain == DOMAIN
+    assert failed.value.translation_key == "install_failed_device_offline"
+    assert failed.value.translation_placeholders == {"title": "host-node"}
+    assert str(failed.value) == "Install of host-node failed: device offline"
 
     assert fake.mismatches == []
     assert fake.finished
@@ -514,6 +530,28 @@ async def test_an_install_interrupted_by_a_restart_is_re_attached_and_recorded(
     assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
     assert await _active_jobs(hass, entry) is None
     assert _notifications(hass) == []
+
+
+async def test_an_install_action_waiting_when_home_assistant_stops_fails_as_interrupted(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url)
+    fake.transcript = queue_install("c1", "u1")
+    fake.jobs = {"c1": job_events("INFO Compiling", status=None)}
+    action = hass.async_create_task(_install(hass))
+    await fake.running.wait()
+
+    # Home Assistant stops while the compile runs on.
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    with pytest.raises(HomeAssistantError, match="interrupted") as interrupted:
+        await action
+    assert interrupted.value.translation_domain == DOMAIN
+    assert interrupted.value.translation_key == "install_interrupted"
+    assert interrupted.value.translation_placeholders == {"title": "host-node"}
 
 
 async def _set_up_after_a_restart(
