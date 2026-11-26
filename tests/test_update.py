@@ -315,6 +315,25 @@ async def test_an_entry_whose_device_builder_is_unsupported_at_startup_raises_a_
     assert issue.translation_key == "unsupported_server_version"
 
 
+async def test_an_entry_whose_device_builder_cannot_be_reached_retries_with_a_translated_reason(
+    hass: HomeAssistant,
+) -> None:
+    async with serve([{"dir": "close"}]) as (url, _):
+        entry = _entry(url)
+        entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert entry.error_reason_translation_domain == DOMAIN
+    assert entry.error_reason_translation_key == "device_builder_unavailable"
+    assert entry.error_reason_translation_placeholders is not None
+    assert entry.error_reason_translation_placeholders["title"] == "host-node"
+    assert entry.error_reason_translation_placeholders["error"].startswith(
+        "cannot reach the Device Builder: "
+    )
+
+
 async def test_removing_the_entry_drops_its_repair_issue_and_stored_versions(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],

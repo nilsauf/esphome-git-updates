@@ -149,6 +149,15 @@
     },
     "install_outcome_unknown": {
       "message": "Install of {title} has an unknown outcome"
+    },
+    "device_builder_unavailable": {
+      "message": "Cannot poll the Device Builder for {title}: {error}"
+    },
+    "configuration_unreadable": {
+      "message": "Cannot read the Configuration {configuration}: {error}"
+    },
+    "git_sources_unreadable": {
+      "message": "Cannot read the Git Sources of {configuration}: {error}"
     }
   }
 }

@@ -158,11 +158,17 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
                         {"file": err.path, "error": err.details},
                     ) from err
         except DeviceBuilderUnavailable as err:
-            raise UpdateFailed(str(err)) from err
+            raise _poll_failed(
+                "device_builder_unavailable", title=self.config_entry.title, error=str(err)
+            ) from err
         except CommandFailed as err:
-            raise UpdateFailed(f"cannot read {configuration}: {err}") from err
+            raise _poll_failed(
+                "configuration_unreadable", configuration=configuration, error=str(err)
+            ) from err
         except DiscoveryError as err:
-            raise UpdateFailed(f"cannot read the Git Sources of {configuration}: {err}") from err
+            raise _poll_failed(
+                "git_sources_unreadable", configuration=configuration, error=str(err)
+            ) from err
 
     async def _async_poll_now(self) -> Snapshot:
         """Poll the Followed Sources now, reporting the pre-install check; raise
@@ -196,6 +202,15 @@ def _reader(client: DeviceBuilderClient, configuration: str, files: dict[str, st
         return files[path]
 
     return read
+
+
+def _poll_failed(translation_key: str, **placeholders: str) -> UpdateFailed:
+    """The translated error of a Git poll that could not read the YAML."""
+    return UpdateFailed(
+        translation_domain=DOMAIN,
+        translation_key=translation_key,
+        translation_placeholders=placeholders,
+    )
 
 
 def _refused(

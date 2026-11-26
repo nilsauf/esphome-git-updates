@@ -188,7 +188,10 @@ async def test_an_install_is_refused_when_the_yaml_cannot_be_read_to_check_it(
     assert refused.value.translation_key == "install_refused_unreadable_yaml"
     assert refused.value.translation_placeholders is not None
     assert refused.value.translation_placeholders["title"] == "host-node"
-    assert refused.value.translation_placeholders["error"]
+    # The poll's own translated message, not a bare parser error.
+    assert refused.value.translation_placeholders["error"].startswith(
+        "Cannot read the Git Sources of"
+    )
 
     assert builder.mismatches == []
 
