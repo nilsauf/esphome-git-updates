@@ -40,9 +40,10 @@ DEVICE_OFFLINE_TEXT = (
 
 # A re-attached Install whose jobs the Device Builder no longer knows.
 OUTCOME_UNKNOWN_TEXT = (
-    "Home Assistant restarted while an Install was running, and the Device Builder "
-    "no longer knows its jobs, so whether it succeeded is unknown. Nothing was "
-    "recorded: if an update is still offered, install it again."
+    "The integration was reloaded or Home Assistant restarted while an Install was "
+    "running, and the Device Builder no longer knows its jobs, so whether it "
+    "succeeded is unknown. Nothing was recorded: if an update is still offered, "
+    "install it again."
 )
 
 # What an over-the-air upload prints when it cannot reach the device. The

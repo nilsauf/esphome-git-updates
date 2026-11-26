@@ -409,4 +409,6 @@ async def test_an_install_running_on_a_replaced_device_builder_ends_with_its_out
             assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.0"
             [notification] = _notifications(hass)
             assert "unknown" in str(notification["title"]).lower()
+            # It names the reload as a cause, not only a restart.
+            assert "reloaded" in notification["message"]
             assert await hass.config_entries.async_unload(entry.entry_id)
