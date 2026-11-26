@@ -10,14 +10,18 @@ by a human, not asserted here.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 
 from custom_components.esphome_git_updates import diagnostics, update
 from custom_components.esphome_git_updates.config_flow import EsphomeGitUpdatesConfigFlow
+from fake_device_builder import serve, server_info
+from tracked_config import CONFIGURATION, ENTITY_ID, OTA, set_up
 
 ROOT = Path(__file__).resolve().parent.parent
 INTEGRATION = ROOT / "custom_components" / "esphome_git_updates"
@@ -184,13 +188,20 @@ def test_parallel_updates_evidence_the_update_platform_declares_its_limit() -> N
     assert isinstance(getattr(update, "PARALLEL_UPDATES", None), int)
 
 
-def test_icon_translations_evidence_the_entity_key_has_icon_definitions() -> None:
-    source = (INTEGRATION / "update.py").read_text()
-    declared = re.findall(r'^\s+_attr_translation_key = "([^"]+)"$', source, re.MULTILINE)
-    assert declared, "the update entity sets no translation key"
-    icons = json.loads((INTEGRATION / "icons.json").read_text())
-    for key in declared:
-        assert key in icons["entity"]["update"], key
+@pytest.mark.usefixtures("enable_custom_integrations")
+async def test_icon_translations_evidence_the_entity_key_has_icon_definitions(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry
+) -> None:
+    async with serve(
+        [server_info(esphome_version="2026.10.1")],
+        {CONFIGURATION: f"esphome:\n  name: host-node\n{OTA}"},
+    ) as (_, fake):
+        await set_up(hass, fake)
+        entity = entity_registry.async_get(ENTITY_ID)
+        assert entity is not None
+        assert entity.translation_key, "the update entity sets no translation key"
+        icons = json.loads((INTEGRATION / "icons.json").read_text())
+        assert entity.translation_key in icons["entity"]["update"]
 
 
 def test_strict_typing_evidence_ci_type_checks_the_standalone_cli_strictly() -> None:
