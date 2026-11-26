@@ -95,8 +95,8 @@ async def test_a_missing_add_on_is_reported_even_if_core_esphome_knows_a_device_
 ) -> None:
     """Core esphome's hass.data is its internal state, not an API (HACS review)."""
     async with serve(load_fixture("list")) as (url, _):
-        dashboard = SimpleNamespace(addon_slug="5c53de3b_esphome", url=url)
-        hass.data["esphome_dashboard_manager"] = SimpleNamespace(async_get=lambda: dashboard)
+        device_builder = SimpleNamespace(addon_slug="5c53de3b_esphome", url=url)
+        hass.data["esphome_dashboard_manager"] = SimpleNamespace(async_get=lambda: device_builder)
         result = await _start_addon(hass)
 
     assert result["type"] is FlowResultType.FORM
