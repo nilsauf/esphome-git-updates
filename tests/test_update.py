@@ -19,6 +19,9 @@ from homeassistant.helpers import (
     device_registry as dr,
 )
 from homeassistant.helpers import (
+    entity_platform,
+)
+from homeassistant.helpers import (
     entity_registry as er,
 )
 from homeassistant.helpers import (
@@ -104,6 +107,17 @@ async def test_the_add_on_ingress_port_is_looked_up_again_when_the_entry_is_set_
     state = hass.states.get(ENTITY_ID)
     assert state is not None
     assert state.attributes["latest_version"] == "2026.11.0"
+
+
+async def test_the_update_platform_declares_no_parallel_update_limit(
+    hass: HomeAssistant, builder: tuple[str, FakeDeviceBuilder]
+) -> None:
+    """Polling is the coordinators' job and Installs are serialized by the Install runner."""
+    await _set_up(hass, builder[0])
+
+    [platform] = entity_platform.async_get_platforms(hass, DOMAIN)
+    assert platform.domain == "update"
+    assert getattr(platform.platform, "PARALLEL_UPDATES", None) == 0
 
 
 async def test_a_new_entry_assumes_the_device_runs_the_available_version(

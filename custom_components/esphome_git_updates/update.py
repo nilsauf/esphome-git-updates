@@ -28,6 +28,10 @@ from .linked_device import LinkedDevice
 from .options import Options
 from .versions import Versions
 
+# No per-entity limit: the coordinators do the polling, and Installs are
+# serialized by the Install runner, so there is nothing left to throttle.
+PARALLEL_UPDATES = 0
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
