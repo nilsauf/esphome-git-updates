@@ -69,7 +69,7 @@
       }
     },
     "error": {
-      "addon_not_found": "Kein ESPHome Add-on mit diesem Slug gefunden. Prüfe den Slug oder wähle stattdessen **Manuelle URL**.",
+      "addon_not_found": "Kein ESPHome Add-on mit diesem Slug gefunden. Prüfe den Slug oder wähle stattdessen „Manuelle URL“.",
       "cannot_connect": "Verbindung zum Device Builder fehlgeschlagen.",
       "invalid_auth": "Der Device Builder hat den Benutzernamen oder das Passwort abgelehnt.",
       "unsupported_version": "Diese Version des Device Builders wird nicht unterstützt.",
