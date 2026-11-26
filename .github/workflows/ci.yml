@@ -20,7 +20,7 @@ jobs:
         run: >
           pip install
           pytest-homeassistant-custom-component==0.13.375
-          mypy types-PyYAML ruff==0.17.4
+          pytest-cov mypy types-PyYAML ruff==0.17.4
       - name: Lint
         run: ruff check .
       - name: Format check
@@ -35,7 +35,9 @@ jobs:
           mypy --config-file /dev/null --strict
           scripts/device_builder_cli.py tests/test_cli.py tests/test_device_builder.py
       - name: Test
-        run: pytest -q
+        run: pytest -q --cov=custom_components/esphome_git_updates --cov-report=json
+      - name: Coverage of every module above 95%
+        run: python scripts/check_module_coverage.py coverage.json custom_components/esphome_git_updates
 
   hassfest:
     runs-on: ubuntu-latest

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from contextlib import suppress
 
 import aiohttp
 import pytest
@@ -13,6 +15,7 @@ from fake_device_builder import (
     Transcript,
     job_events,
     load_fixture,
+    queue_install,
     serve,
     server_info,
     with_clean_jobs,
@@ -1068,3 +1071,329 @@ async def test_a_resumed_compile_that_armed_a_queued_update_is_refused_as_deferr
         ),
     )
     assert result.outcome is device_builder.InstallOutcome.DEFERRED
+
+
+# --- Protocol surprises, failures and late frames -----------------------------
+
+
+def _ask(message_id: str, command: str, args: dict[str, object]) -> dict[str, object]:
+    """The client sending *command* with *args* as *message_id*."""
+    return {
+        "dir": "out",
+        "frame": {"command": command, "message_id": message_id, "args": args},
+    }
+
+
+def _answer(message_id: str, **reply: object) -> dict[str, object]:
+    """The server answering *message_id* with *reply* (`result`, `error_code`, `event`...)."""
+    return {"dir": "in", "frame": {"message_id": message_id, **reply}}
+
+
+@pytest.mark.parametrize("handshake", [b"\x00binary", "not json"])
+async def test_a_handshake_that_is_not_a_json_text_message_raises_unexpected_frame(
+    handshake: str | bytes,
+) -> None:
+    async with (
+        serve([{"dir": "raw", "data": handshake}]) as (url, _),
+        aiohttp.ClientSession() as session,
+    ):
+        with pytest.raises(device_builder.UnexpectedFrame):
+            async with device_builder.connect(session, url):
+                pass
+
+
+@pytest.mark.parametrize("reply", [b"\x00binary", "not json", "[1, 2]"])
+async def test_a_reply_that_is_not_a_json_object_raises_unexpected_frame(
+    reply: str | bytes,
+) -> None:
+    transcript = [server_info(), _ask("1", "devices/list", {}), {"dir": "raw", "data": reply}]
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.UnexpectedFrame):
+            await client.list_configurations()
+
+
+async def test_an_answer_with_neither_a_result_nor_an_error_raises_unexpected_frame() -> None:
+    transcript = [server_info(), _ask("1", "devices/list", {}), _answer("1")]
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.UnexpectedFrame):
+            await client.list_configurations()
+
+
+async def test_every_command_after_a_dropped_connection_raises_connection_lost() -> None:
+    transcript = [server_info(), _ask("1", "devices/list", {}), {"dir": "close"}]
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.ConnectionLost):
+            await client.list_configurations()
+        with pytest.raises(device_builder.ConnectionLost):
+            await client.get_config("b2500.yaml")
+
+
+async def test_a_command_sent_on_a_closed_connection_raises_connection_lost() -> None:
+    async with serve([server_info()]) as (url, _):
+        session = aiohttp.ClientSession()
+        async with device_builder.connect(session, url) as client:
+            await session.close()
+            with pytest.raises(device_builder.ConnectionLost):
+                await client.list_configurations()
+
+
+async def test_get_config_answered_with_something_other_than_text_raises_unexpected_frame() -> None:
+    transcript = [
+        server_info(),
+        _ask("1", "devices/get_config", {"configuration": "b2500.yaml"}),
+        _answer("1", result={"esphome": {"name": "b2500"}}),
+    ]
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.UnexpectedFrame):
+            await client.get_config("b2500.yaml")
+
+
+async def test_update_config_refused_for_another_reason_raises_command_failed() -> None:
+    transcript = [
+        server_info(),
+        _ask(
+            "1",
+            "devices/update_config",
+            {"configuration": "b2500.yaml", "content": "new\n", "expected": "old\n"},
+        ),
+        _answer("1", error_code="not_found", details="Device 'b2500.yaml' not found"),
+    ]
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.CommandFailed) as err:
+            await client.update_config("b2500.yaml", "new\n", expected="old\n")
+    assert not isinstance(err.value, device_builder.PreconditionFailed)
+    assert err.value.error_code == "not_found"
+
+
+async def test_get_job_progress_of_a_job_the_device_builder_no_longer_knows_is_none() -> None:
+    transcript = [
+        server_info(),
+        _ask("1", "firmware/get_job", {"job_id": "gone"}),
+        _answer("1", result=None),
+    ]
+    async with (
+        serve(transcript) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        assert await client.get_job_progress("gone") is None
+    assert fake.mismatches == []
+
+
+@pytest.mark.parametrize(
+    "replies",
+    [
+        # An event this client does not know.
+        [{"event": "progress", "data": 50}],
+        # The end of the stream, without a result event before it.
+        [{"event": "output", "data": "INFO Compiling\n"}, {"result": None}],
+    ],
+)
+async def test_a_follow_job_stream_the_client_does_not_understand_raises_unexpected_frame(
+    replies: list[dict[str, object]],
+) -> None:
+    transcript = [
+        server_info(),
+        _ask("1", "firmware/follow_job", {"job_id": "c1"}),
+        *(_answer("1", **reply) for reply in replies),
+    ]
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.UnexpectedFrame):
+            await client.follow_job("c1", device_builder.Stage.COMPILE)
+
+
+async def test_following_a_job_refused_for_another_reason_raises_command_failed() -> None:
+    transcript = [
+        server_info(),
+        _ask("1", "firmware/follow_job", {"job_id": "c1"}),
+        _answer("1", error_code="invalid_args", details="job_id is required"),
+    ]
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.CommandFailed) as err:
+            await client.follow_job("c1", device_builder.Stage.COMPILE)
+    assert not isinstance(err.value, device_builder.JobNotFound)
+    assert err.value.error_code == "invalid_args"
+
+
+async def test_a_late_frame_from_a_follow_that_was_given_up_on_is_ignored() -> None:
+    transcript = [
+        server_info(),
+        _ask("1", "firmware/follow_job", {"job_id": "c1"}),
+        _answer("1", event="output", data="INFO Compiling\n"),
+        _ask("2", "devices/list", {}),
+        _answer("1", event="output", data="INFO Still compiling\n"),
+        _answer("2", result={"configured": []}),
+    ]
+    output = asyncio.Event()
+    async with (
+        serve(transcript) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        following = asyncio.create_task(
+            client.follow_job(
+                "c1", device_builder.Stage.COMPILE, on_output=lambda stage, line: output.set()
+            )
+        )
+        await output.wait()
+        following.cancel()
+        with suppress(asyncio.CancelledError):
+            await following
+        assert await client.list_configurations() == []
+    assert fake.mismatches == []
+
+
+async def test_a_late_answer_to_a_command_that_was_given_up_on_is_ignored() -> None:
+    transcript = [
+        server_info(),
+        _ask("1", "devices/list", {}),
+        _ask("2", "devices/list", {}),
+        _answer("1", result={"configured": [_device("late.yaml", "late", "Late")]}),
+        _answer("2", result={"configured": []}),
+    ]
+    async with (
+        serve(transcript) as (url, fake),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(client.list_configurations(), 0.05)
+        assert await client.list_configurations() == []
+    assert fake.mismatches == []
+
+
+async def test_a_first_progress_poll_that_does_not_answer_in_time_does_not_hold_up_the_follow(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(device_builder, "PROGRESS_POLL_TIMEOUT", 0)
+    caplog.set_level(logging.DEBUG)
+    lines: list[str] = []
+    async with serve([server_info()]) as (url, fake):
+        fake.jobs = {"c1": job_events("INFO Compiling\n")}
+        async with (
+            aiohttp.ClientSession() as session,
+            device_builder.connect(session, url) as client,
+        ):
+            job = await client.follow_job(
+                "c1",
+                device_builder.Stage.COMPILE,
+                on_output=lambda stage, line: lines.append(line),
+                on_progress=lambda update: None,
+            )
+    assert job.succeeded
+    assert lines == ["INFO Compiling"]
+    assert "progress poll for job c1 timed out" in caplog.text
+
+
+_LOCAL_CLEAN = {
+    "job_id": "k1",
+    "job_type": "clean",
+    "status": "running",
+    "created_at": "2026-10-29T21:50:00+00:00",
+}
+
+
+@pytest.mark.parametrize(
+    "jobs",
+    [
+        "not a list",
+        [{**_LOCAL_CLEAN, "job_id": "r1", "created_at": "yesterday"}],
+        [{"job_id": "r1"}],
+    ],
+)
+async def test_a_clean_build_whose_jobs_cannot_be_read_raises_unexpected_frame(
+    jobs: object,
+) -> None:
+    transcript = [
+        server_info(),
+        _ask("1", "firmware/clean", {"configuration": "b2500.yaml"}),
+        _answer("1", result=_LOCAL_CLEAN),
+        _ask("2", "firmware/get_jobs", {"configuration": "b2500.yaml"}),
+        _answer("2", result=jobs),
+    ]
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.UnexpectedFrame):
+            await client.install("b2500.yaml", clean_build=True)
+
+
+async def test_a_deferred_compile_whose_cancel_fails_otherwise_raises_command_failed() -> None:
+    transcript = [
+        server_info(),
+        _ask("1", "firmware/install", {"configuration": "b2500.yaml", "port": "OTA"}),
+        _answer("1", result={"job_id": "c1", "job_type": "compile", "is_deferred_install": True}),
+        _ask("2", "firmware/cancel", {"job_id": "c1"}),
+        _answer("2", error_code="internal_error", details="Command failed: firmware/cancel"),
+    ]
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.CommandFailed) as err:
+            await client.install("b2500.yaml")
+    assert err.value.error_code == "internal_error"
+
+
+async def test_an_install_with_no_upload_job_for_its_compile_raises_unexpected_frame() -> None:
+    transcript = [
+        server_info(),
+        _ask("1", "firmware/install", {"configuration": "b2500.yaml", "port": "OTA"}),
+        _answer("1", result={"job_id": "c1", "job_type": "compile", "is_deferred_install": False}),
+        _ask("2", "firmware/get_jobs", {"configuration": "b2500.yaml"}),
+        _answer("2", result=[{"job_id": "c1", "job_type": "compile"}]),
+    ]
+    async with (
+        serve(transcript) as (url, _),
+        aiohttp.ClientSession() as session,
+        device_builder.connect(session, url) as client,
+    ):
+        with pytest.raises(device_builder.UnexpectedFrame):
+            await client.install("b2500.yaml")
+
+
+async def test_an_install_without_an_observer_runs_to_the_end() -> None:
+    async with serve(queue_install("c1", "u1", configuration="b2500.yaml")) as (url, fake):
+        fake.jobs = {
+            "c1": job_events("[1/1] Compiling\n"),
+            "u1": job_events("Uploading: [====] 100%\n"),
+        }
+        async with (
+            aiohttp.ClientSession() as session,
+            device_builder.connect(session, url) as client,
+        ):
+            result = await client.install("b2500.yaml")
+    assert result.outcome is device_builder.InstallOutcome.COMPLETED
+    assert [job.job_id for job in result.jobs] == ["c1", "u1"]
+    assert fake.mismatches == []
