@@ -6,7 +6,7 @@ import logging
 from collections.abc import Mapping
 from datetime import timedelta
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -101,28 +101,36 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
         """
         title = self.config_entry.title
         if device_offline:
-            raise _refused(title, "install_refused_device_offline")
+            raise install_error(title, "install_refused_device_offline")
         try:
             snapshot = await self._async_poll_now()
         except Exception as err:
             # As after a failed scheduled poll, the last good poll stays.
-            raise _refused(title, "install_refused_unreadable_yaml", {"error": str(err)}) from err
+            raise install_error(
+                title, "install_refused_unreadable_yaml", {"error": str(err)}
+            ) from err
         self.async_set_updated_data(snapshot)
         plan_or_refusal = snapshot.install(options.upload_address, options.clean_build)
         if isinstance(plan_or_refusal, Refusal):
-            raise _refused(title, plan_or_refusal.translation_key, plan_or_refusal.placeholders)
+            raise install_error(
+                title, plan_or_refusal.translation_key, plan_or_refusal.placeholders
+            )
         return plan_or_refusal
 
-    async def async_set_poll_interval(self, interval: timedelta) -> None:
+    @callback
+    def async_set_poll_interval(self, interval: timedelta) -> None:
         """Poll every *interval* from now on, starting with a poll right away.
 
         The poll already scheduled would otherwise still come after the old
-        interval; a refresh schedules the next one after the new interval.
+        interval; a refresh schedules the next one after the new interval. It
+        runs as a task, so it sees the options being saved with the interval.
         """
         if interval == self.update_interval:
             return
         self.update_interval = interval
-        await self.async_refresh()
+        self.config_entry.async_create_task(
+            self.hass, self.async_refresh(), f"{self.name} poll interval changed"
+        )
 
     async def async_compare_changed(self) -> None:
         """Ask GitHub again for any change whose comparison is missing."""
@@ -154,11 +162,17 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
                         {"file": err.path, "error": err.details},
                     ) from err
         except DeviceBuilderUnavailable as err:
-            raise UpdateFailed(str(err)) from err
+            raise _poll_failed(
+                "device_builder_unavailable", title=self.config_entry.title, error=str(err)
+            ) from err
         except CommandFailed as err:
-            raise UpdateFailed(f"cannot read {configuration}: {err}") from err
+            raise _poll_failed(
+                "configuration_unreadable", configuration=configuration, error=str(err)
+            ) from err
         except DiscoveryError as err:
-            raise UpdateFailed(f"cannot read the Git Sources of {configuration}: {err}") from err
+            raise _poll_failed(
+                "git_sources_unreadable", configuration=configuration, error=str(err)
+            ) from err
 
     async def _async_poll_now(self) -> Snapshot:
         """Poll the Followed Sources now, reporting the pre-install check; raise
@@ -194,10 +208,19 @@ def _reader(client: DeviceBuilderClient, configuration: str, files: dict[str, st
     return read
 
 
-def _refused(
+def _poll_failed(translation_key: str, **placeholders: str) -> UpdateFailed:
+    """The translated error of a Git poll that could not read the YAML."""
+    return UpdateFailed(
+        translation_domain=DOMAIN,
+        translation_key=translation_key,
+        translation_placeholders=placeholders,
+    )
+
+
+def install_error(
     title: str, translation_key: str, placeholders: Mapping[str, str] | None = None
 ) -> HomeAssistantError:
-    """The translated error refusing an Install of *title*."""
+    """The translated error refusing or failing an Install of *title*."""
     return HomeAssistantError(
         translation_domain=DOMAIN,
         translation_key=translation_key,

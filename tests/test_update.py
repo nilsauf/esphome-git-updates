@@ -12,7 +12,6 @@ from unittest.mock import MagicMock
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
-from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant, callback
@@ -47,7 +46,7 @@ from fake_device_builder import (
     server_info,
 )
 from stored_record import record_an_install, recorded_esphome_version, stored_record
-from tracked_config import OTA
+from tracked_config import OTA, notifications
 
 ENTITY_ID = "update.host_node_firmware"
 INTEGRATION = Path(__file__).resolve().parent.parent / "custom_components" / DOMAIN
@@ -315,6 +314,25 @@ async def test_an_entry_whose_device_builder_is_unsupported_at_startup_raises_a_
     assert issue.translation_key == "unsupported_server_version"
 
 
+async def test_an_entry_whose_device_builder_cannot_be_reached_retries_with_a_translated_reason(
+    hass: HomeAssistant,
+) -> None:
+    async with serve([{"dir": "close"}]) as (url, _):
+        entry = _entry(url)
+        entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert entry.error_reason_translation_domain == DOMAIN
+    assert entry.error_reason_translation_key == "device_builder_unavailable"
+    assert entry.error_reason_translation_placeholders is not None
+    assert entry.error_reason_translation_placeholders["title"] == "host-node"
+    assert entry.error_reason_translation_placeholders["error"].startswith(
+        "cannot reach the Device Builder: "
+    )
+
+
 async def test_removing_the_entry_drops_its_repair_issue_and_stored_versions(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
@@ -349,10 +367,6 @@ async def _install(hass: HomeAssistant) -> None:
     await hass.async_block_till_done()
 
 
-def _notifications(hass: HomeAssistant) -> list[persistent_notification.Notification]:
-    return list(persistent_notification._async_get_or_create_notifications(hass).values())
-
-
 async def test_a_successful_install_records_the_version_and_the_update_disappears(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
@@ -380,7 +394,7 @@ async def test_a_successful_install_records_the_version_and_the_update_disappear
     assert state.attributes["in_progress"] is False
     assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
     assert await _active_jobs(hass, entry) is None
-    assert _notifications(hass) == []
+    assert notifications(hass) == []
 
 
 async def test_after_an_install_the_device_shows_the_esphome_version_it_now_runs(
@@ -417,7 +431,7 @@ async def test_a_device_builder_that_answers_an_install_unexpectedly_raises_a_re
     issue = issue_registry.async_get_issue(DOMAIN, protocol_issue_id(entry.entry_id))
     assert issue is not None
     assert issue.translation_key == "unexpected_frame"
-    [notification] = _notifications(hass)
+    [notification] = notifications(hass)
     assert "Install failed" in str(notification["title"])
 
 
@@ -450,7 +464,7 @@ async def test_a_failed_compile_notifies_with_the_stage_error_and_log_tail_and_r
     assert state.attributes["installed_version"] == "2026.10.0"
     assert state.attributes["in_progress"] is False
     assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.0"
-    [notification] = _notifications(hass)
+    [notification] = notifications(hass)
     assert "host-node" in str(notification["title"])
     message = notification["message"]
     assert "compile" in message
@@ -491,7 +505,7 @@ async def test_a_successful_install_with_warnings_notifies_with_the_warnings(
 
     assert fake.mismatches == []
     assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
-    [notification] = _notifications(hass)
+    [notification] = notifications(hass)
     assert "host-node" in str(notification["title"])
     assert "warning" in str(notification["title"]).lower()
     assert (
@@ -510,12 +524,12 @@ async def test_a_clean_success_dismisses_the_notification_of_an_earlier_failed_i
     fake.transcript = install_transcript("install_upload_failed")
     with pytest.raises(HomeAssistantError):
         await _install(hass)
-    assert len(_notifications(hass)) == 1
+    assert len(notifications(hass)) == 1
 
     fake.transcript = install_transcript("install_clean_success")
     await _install(hass)
 
-    assert _notifications(hass) == []
+    assert notifications(hass) == []
 
 
 async def test_an_install_the_device_builder_defers_for_an_offline_device_fails_as_device_offline(
@@ -540,7 +554,7 @@ async def test_an_install_the_device_builder_defers_for_an_offline_device_fails_
     assert hass.states.get(ENTITY_ID).state == STATE_ON  # type: ignore[union-attr]
     assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.0"
     assert await _active_jobs(hass, entry) is None
-    [notification] = _notifications(hass)
+    [notification] = notifications(hass)
     assert "device offline" in str(notification["title"]).lower()
     assert "queued update was cleared" in notification["message"]
 
@@ -615,7 +629,7 @@ async def test_an_install_interrupted_by_a_restart_is_re_attached_and_recorded(
     assert seen[-1] is False and True in seen
     assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
     assert await _active_jobs(hass, entry) is None
-    assert _notifications(hass) == []
+    assert notifications(hass) == []
 
 
 async def test_an_install_action_waiting_when_home_assistant_stops_fails_as_interrupted(
@@ -677,7 +691,7 @@ async def test_a_re_attached_install_whose_jobs_are_gone_tells_the_user_the_outc
     assert state.attributes["in_progress"] is False
     assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.0"
     assert await _active_jobs(hass, entry) is None
-    [notification] = _notifications(hass)
+    [notification] = notifications(hass)
     assert "unknown" in str(notification["title"]).lower()
     assert "restarted" in notification["message"]
 
@@ -712,7 +726,7 @@ async def test_with_clean_build_on_an_install_cleans_before_it_compiles(
     assert fake.mismatches == []
     assert fake.finished
     assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
-    assert _notifications(hass) == []
+    assert notifications(hass) == []
 
 
 async def test_the_upload_address_override_is_the_install_port(
@@ -722,6 +736,28 @@ async def test_the_upload_address_override_is_the_install_port(
     url, fake = builder
     entry = await _set_up_with_an_update(hass, url, upload_address="192.168.1.42")
     fake.transcript = install_transcript("install_clean_success", port="192.168.1.42")
+
+    await _install(hass)
+
+    assert fake.mismatches == []
+    assert fake.finished
+    assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
+
+
+async def test_clean_build_and_upload_address_changed_in_the_options_apply_to_the_next_install(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"clean_build": True, "git_poll_interval": 30, "upload_address": "192.168.1.42"},
+    )
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+    fake.transcript = install_transcript("install_clean_success", clean={}, port="192.168.1.42")
 
     await _install(hass)
 
@@ -846,4 +882,4 @@ async def test_a_re_attached_install_shows_progress_from_its_job_and_completes(
     assert state.attributes["update_percentage"] is None
     assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
     assert await _active_jobs(hass, entry) is None
-    assert _notifications(hass) == []
+    assert notifications(hass) == []

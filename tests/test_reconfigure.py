@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
-from homeassistant.components import persistent_notification
 from homeassistant.config_entries import (
     SOURCE_REAUTH,
     SOURCE_RECONFIGURE,
@@ -33,7 +32,7 @@ from fake_device_builder import (
     server_info,
 )
 from stored_record import record_an_install, recorded_esphome_version
-from tracked_config import CONFIGURATION, ENTITY_ID, OTA, set_up, tick
+from tracked_config import CONFIGURATION, ENTITY_ID, OTA, notifications, set_up, tick
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -288,7 +287,7 @@ async def _reconfigure_to(hass: HomeAssistant, entry: MockConfigEntry, **locatio
 
 @reloads
 async def test_moving_the_device_builder_keeps_the_entity_and_the_installed_record(
-    hass: HomeAssistant, entity_registry: er.EntityRegistry
+    hass: HomeAssistant, entity_registry: er.EntityRegistry, caplog: pytest.LogCaptureFixture
 ) -> None:
     await record_an_install(hass, "tracked", "2026.10.0")
     async with serve([server_info(esphome_version="2026.10.1")], FILES) as (_, old):
@@ -302,6 +301,8 @@ async def test_moving_the_device_builder_keeps_the_entity_and_the_installed_reco
         new.transcripts = [_listing(), [server_info(esphome_version="2026.10.1")]]
         await _reconfigure_to(hass, entry, url=url)
 
+        # Saving schedules the reload itself, the way Home Assistant expects.
+        assert "update listener" not in caplog.text
         assert new.mismatches == []
         assert entry.state is ConfigEntryState.LOADED
         assert entity_registry.async_get(ENTITY_ID) == before
@@ -361,10 +362,6 @@ async def _start_an_install(hass: HomeAssistant, fake: FakeDeviceBuilder) -> Moc
     return entry
 
 
-def _notifications(hass: HomeAssistant) -> list[persistent_notification.Notification]:
-    return list(persistent_notification._async_get_or_create_notifications(hass).values())
-
-
 @reloads
 async def test_an_install_running_on_the_same_device_builder_is_followed_through(
     hass: HomeAssistant,
@@ -385,7 +382,7 @@ async def test_an_install_running_on_the_same_device_builder_is_followed_through
         assert state.state == STATE_OFF
         assert state.attributes["in_progress"] is False
         assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
-        assert _notifications(hass) == []
+        assert notifications(hass) == []
 
 
 @reloads
@@ -405,6 +402,8 @@ async def test_an_install_running_on_a_replaced_device_builder_ends_with_its_out
             assert state.state == STATE_ON
             assert state.attributes["in_progress"] is False
             assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.0"
-            [notification] = _notifications(hass)
+            [notification] = notifications(hass)
             assert "unknown" in str(notification["title"]).lower()
+            # It names the reload as a cause, not only a restart.
+            assert "reloaded" in notification["message"]
             assert await hass.config_entries.async_unload(entry.entry_id)

@@ -134,6 +134,7 @@ async def test_successful_reauth_saves_the_credentials_reloads_and_recovers_the_
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
     reauth_started: ReauthStarted,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     entry, fake, flow_id = reauth_started
     fake.transcript = _login()
@@ -145,6 +146,8 @@ async def test_successful_reauth_saves_the_credentials_reloads_and_recovers_the_
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reauth_successful"
     await hass.async_block_till_done(wait_background_tasks=True)
+    # Saving schedules the reload itself, the way Home Assistant expects.
+    assert "update listener" not in caplog.text
 
     assert entry.data["username"] == "admin2"
     assert entry.data["password"] == "new-secret"

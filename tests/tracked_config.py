@@ -9,6 +9,7 @@ from datetime import timedelta
 from typing import Any
 
 from freezegun.api import FrozenDateTimeFactory
+from homeassistant.components import persistent_notification
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
 
@@ -65,3 +66,8 @@ async def tick(hass: HomeAssistant, freezer: FrozenDateTimeFactory, minutes: flo
     freezer.tick(timedelta(minutes=minutes))
     async_fire_time_changed(hass)
     await hass.async_block_till_done(wait_background_tasks=True)
+
+
+def notifications(hass: HomeAssistant) -> list[persistent_notification.Notification]:
+    """The persistent notifications shown, such as an Install's outcome."""
+    return list(persistent_notification._async_get_or_create_notifications(hass).values())

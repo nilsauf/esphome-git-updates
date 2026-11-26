@@ -105,8 +105,9 @@ rules:
   exception-translations:
     status: done
     comment: >
-      Every refusal and failure of an Install carries a translation key and
-      placeholders.
+      Every refusal and failure of an Install, and every failed poll (the
+      setup retry reason, and the unreadable YAML an Install refusal quotes),
+      carries a translation key and placeholders.
   icon-translations: done
   reconfiguration-flow: done
   repair-issues: done

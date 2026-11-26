@@ -13,7 +13,6 @@ from typing import Any
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
-from homeassistant.components import persistent_notification
 from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -32,6 +31,7 @@ from tracked_config import (
     ENTITY_ID,
     OTA,
     install,
+    notifications,
     press_install,
     set_up,
     tick,
@@ -71,10 +71,6 @@ def _state(hass: HomeAssistant) -> Any:
     state = hass.states.get(ENTITY_ID)
     assert state is not None
     return state
-
-
-def _notifications(hass: HomeAssistant) -> list[persistent_notification.Notification]:
-    return list(persistent_notification._async_get_or_create_notifications(hass).values())
 
 
 def _moved(url: str, old: str, new: str) -> str:
@@ -127,7 +123,7 @@ async def test_a_yaml_edited_since_the_pre_install_read_fails_the_install_before
     # Nothing was compiled: the Install never got to `firmware/install`.
     assert not builder.finished
     assert builder.files[CONFIGURATION] == edited
-    [notification] = _notifications(hass)
+    [notification] = notifications(hass)
     assert "update YAML" in notification["message"]
     state = _state(hass)
     assert state.state == STATE_ON
