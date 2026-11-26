@@ -151,6 +151,74 @@ async def test_the_entity_sits_on_a_device_the_integration_creates(
     assert [(e.entity_id, e.device_id) for e in entities] == [(ENTITY_ID, devices[0].id)]
 
 
+async def test_the_device_it_creates_tells_who_made_it_what_it_runs_and_where_to_manage_it(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    url, _ = builder
+    entry = await _set_up(hass, url)
+
+    [device] = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+    assert device.manufacturer == "ESPHome"
+    assert device.model == "host-node.yaml"
+    assert device.sw_version == "2026.10.1"
+    assert device.configuration_url == url
+
+
+async def test_the_device_builder_address_on_the_device_carries_no_credentials(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    url, _ = builder
+    entry = await _set_up(hass, url.replace("http://", "http://nils:secret@"))
+
+    [device] = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+    assert device.configuration_url == url
+
+
+async def test_a_device_builder_in_the_add_on_puts_no_address_on_the_device(
+    hass: HomeAssistant, supervisor: MagicMock, device_registry: dr.DeviceRegistry
+) -> None:
+    files = {"host-node.yaml": f"esphome:\n  name: host-node\n{OTA}"}
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="host-node",
+        unique_id="host-node.yaml",
+        data={"addon_slug": "5c53de3b_esphome", "configuration": "host-node.yaml"},
+    )
+    entry.add_to_hass(hass)
+    async with serve([server_info(esphome_version="2026.10.1")], files) as (url, _):
+        supervisor.addons_installed = {"5c53de3b_esphome": port_of(url)}
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    [device] = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+    assert device.configuration_url is None
+    assert device.sw_version == "2026.10.1"
+
+
+async def test_a_changed_location_shows_on_the_device_after_the_reload(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    old_url, _ = builder
+    entry = await _set_up(hass, old_url)
+    files = {"host-node.yaml": f"esphome:\n  name: host-node\n{OTA}"}
+
+    async with serve([server_info(esphome_version="2026.10.1")], files) as (new_url, _):
+        # What a reconfigure does: replace the location, then reload the entry.
+        hass.config_entries.async_update_entry(entry, data={**entry.data, "url": new_url})
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+
+    [device] = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+    assert new_url != old_url
+    assert device.configuration_url == new_url
+
+
 async def test_the_entity_carries_the_translation_key_its_icon_definitions_use(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],
@@ -313,6 +381,24 @@ async def test_a_successful_install_records_the_version_and_the_update_disappear
     assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
     assert await _active_jobs(hass, entry) is None
     assert _notifications(hass) == []
+
+
+async def test_after_an_install_the_device_shows_the_esphome_version_it_now_runs(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    device_registry: dr.DeviceRegistry,
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url)
+    [device] = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+    assert device.sw_version == "2026.10.0"
+    fake.transcript = install_transcript("install_clean_success")
+
+    await _install(hass)
+
+    after = device_registry.async_get(device.id)
+    assert isinstance(after, dr.DeviceEntry)
+    assert after.sw_version == "2026.10.1"
 
 
 async def test_a_device_builder_that_answers_an_install_unexpectedly_raises_a_repair_issue(
