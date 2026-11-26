@@ -11,7 +11,7 @@
       },
       "reconfigure": {
         "title": "Device Builder",
-        "description": "Where the ESPHome Device Builder for this configuration now runs. The Tracked Config, its update entity and what it remembers about the last Install are kept.",
+        "description": "Where the ESPHome Device Builder for this Configuration now runs. The Tracked Config, its update entity and what it remembers about the last Install are kept.",
         "menu_options": {
           "addon": "ESPHome add-on (auto)",
           "manual": "Manual URL"
@@ -55,7 +55,7 @@
       },
       "configuration": {
         "title": "Tracked Config",
-        "description": "The ESPHome configuration to watch for updates.",
+        "description": "The ESPHome Configuration to watch for updates.",
         "data": {
           "configuration": "Configuration"
         }
@@ -76,9 +76,9 @@
       "not_linkable_device": "Pick a device of the ESPHome or MQTT integration."
     },
     "abort": {
-      "already_configured": "This configuration is already tracked.",
-      "no_configurations": "The Device Builder has no configurations.",
-      "configuration_not_listed": "That Device Builder does not list {configuration}, so this entry could not poll it. Pick the Device Builder that has {configuration}, or add the configuration there first."
+      "already_configured": "This Configuration is already tracked.",
+      "no_configurations": "The Device Builder has no Configurations.",
+      "configuration_not_listed": "That Device Builder does not list {configuration}, so this entry could not poll it. Pick the Device Builder that has {configuration}, or add the Configuration there first."
     }
   },
   "options": {

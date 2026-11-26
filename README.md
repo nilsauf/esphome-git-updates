@@ -1,6 +1,6 @@
 # ESPHome Git Updates
 
-A Home Assistant integration that offers firmware updates for ESPHome devices whose firmware pulls code from git. It watches one ESPHome configuration per config entry and shows a single update entity for it. An update appears when the Device Builder would compile with a newer ESPHome version, when a Floating Ref (a branch) used by one of the configuration's `external_components` or remote `packages:` gets a new commit, or when a Tag Ref or Unset Ref gets a newer Release or Version Tag. Pressing Install compiles and flashes the device over the air through the ESPHome Device Builder.
+A Home Assistant integration that offers firmware updates for ESPHome devices whose firmware pulls code from git. It watches one ESPHome Configuration per config entry and shows a single update entity for it. An update appears when the Device Builder would compile with a newer ESPHome version, when a Floating Ref (a branch) used by one of the Configuration's `external_components` or remote `packages:` gets a new commit, or when a Tag Ref or Unset Ref gets a newer Release or Version Tag. Pressing Install compiles and flashes the device over the air through the ESPHome Device Builder.
 
 Terms used here (Tracked Config, Git Source, Floating Ref, Tag Ref, Unset Ref, Version Tag, …) are defined in [GLOSSARY.md](GLOSSARY.md).
 
@@ -40,7 +40,7 @@ Setup then connects to the Device Builder and lists its Configurations. It shows
 
 ### 2. The Configuration
 
-- **Configuration** (required): the ESPHome configuration to watch for updates, picked from those the Device Builder lists (by their friendly name, or their name). This becomes the Tracked Config, and the entry is named after it. A Configuration that is already tracked is refused.
+- **Configuration** (required): the ESPHome Configuration to watch for updates, picked from those the Device Builder lists (by their friendly name, or their name). This becomes the Tracked Config, and the entry is named after it. A Configuration that is already tracked is refused.
 
 ### 3. The Linked Device
 
