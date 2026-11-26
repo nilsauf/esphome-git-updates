@@ -198,3 +198,22 @@ async def test_a_new_sw_version_that_gives_no_version_is_warned_about(
     assert _installed(hass) == (STATE_UNKNOWN, None)
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert any("custom firmware" in w and "ESPHome version" in w for w in warnings)
+
+
+async def test_the_linked_device_entry_is_left_as_its_integration_made_it(
+    hass: HomeAssistant, builder: FakeDeviceBuilder, device_registry: dr.DeviceRegistry
+) -> None:
+    device = _esphome_device(hass, "2026.10.0 (config hash 0x1a2b3c4d)")
+    _entity_of(hass, device, "-60")
+    await _set_up(hass, builder, device)
+
+    await install(hass, builder, "install_clean_success")
+
+    after = device_registry.async_get(device.id)
+    assert isinstance(after, dr.DeviceEntry)
+    assert (after.manufacturer, after.model, after.sw_version, after.configuration_url) == (
+        None,
+        None,
+        "2026.10.0 (config hash 0x1a2b3c4d)",
+        None,
+    )

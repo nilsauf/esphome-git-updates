@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from homeassistant.components import persistent_notification
@@ -12,12 +12,15 @@ from homeassistant.components.update import (
     UpdateEntity,
     UpdateEntityFeature,
 )
+from homeassistant.const import CONF_URL
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo, EventDeviceRegistryUpdatedData
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_device_registry_updated_event
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from yarl import URL
 
 from .const import CONF_CONFIGURATION, DOMAIN
 from .coordinator import EsphomeGitUpdatesConfigEntry, EsphomeVersionCoordinator
@@ -25,6 +28,7 @@ from .git_coordinator import GitSourcesCoordinator
 from .install import ActiveInstall, Installed, InstallEnding, InstallRunner
 from .installed_record import InstalledRecord
 from .linked_device import LinkedDevice
+from .location import is_manual_location
 from .options import Options
 from .versions import Versions
 
@@ -36,6 +40,14 @@ async def async_setup_entry(
 ) -> None:
     """Add the Tracked Config's one update entity."""
     async_add_entities([TrackedConfigUpdate(entry)])
+
+
+def _configuration_url(location: Mapping[str, Any]) -> str | None:
+    """The Device Builder address to show on the device: a manual URL without any
+    credentials; none for the add-on, whose ingress address is internal."""
+    if not is_manual_location(location):
+        return None
+    return str(URL(location[CONF_URL]).with_user(None))
 
 
 class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEntity):
@@ -76,7 +88,10 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
             self._attr_device_info = DeviceInfo(
                 identifiers={(DOMAIN, entry.entry_id)},
                 name=entry.title,
+                manufacturer="ESPHome",
                 model=entry.data[CONF_CONFIGURATION],
+                sw_version=self._installed_esphome(),
+                configuration_url=_configuration_url(entry.data),
             )
 
     async def async_added_to_hass(self) -> None:
@@ -197,6 +212,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
             self._set_state(False, None)
             raise
         self._set_state(False, None)
+        self._update_own_device_sw_version()
         if ending.notification is None:
             persistent_notification.async_dismiss(self.hass, self._notification_id)
         else:
@@ -204,6 +220,18 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         # Nobody waits for a re-attached Install: its notification says how it went.
         if not isinstance(ending, Installed) and not reattached:
             raise HomeAssistantError(f"Install of {self._entry.title} {ending.summary}")
+
+    def _update_own_device_sw_version(self) -> None:
+        """Keep the own device's software version at the Installed ESPHome Version:
+        HA reads device info only when the entity is added. A Linked Device is
+        owned by its integration and left alone."""
+        if self._linked is not None:
+            return
+        registry = dr.async_get(self.hass)
+        device = registry.async_get_device(identifiers={(DOMAIN, self._entry.entry_id)})
+        installed = self._installed_esphome()
+        if device is not None and device.sw_version != installed:
+            registry.async_update_device(device.id, sw_version=installed)
 
     def _notify(self, headline: str, message: str) -> None:
         persistent_notification.async_create(
