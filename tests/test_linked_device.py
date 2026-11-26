@@ -14,6 +14,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.esphome_git_updates.const import DOMAIN
 from fake_device_builder import FakeDeviceBuilder, serve, server_info
 from stored_record import recorded_esphome_version
 from tracked_config import CONFIGURATION, ENTITY_ID, OTA, install, press_install, set_up
@@ -124,9 +125,12 @@ async def test_a_linked_device_whose_entities_are_all_unavailable_refuses_the_in
     builder.transcript = []
     reads = len(builder.reads)
 
-    with pytest.raises(HomeAssistantError, match="device offline"):
+    with pytest.raises(HomeAssistantError, match="device offline") as refused:
         await press_install(hass)
 
+    assert refused.value.translation_domain == DOMAIN
+    assert refused.value.translation_key == "install_refused_device_offline"
+    assert refused.value.translation_placeholders == {"title": "host-node"}
     assert builder.mismatches == []
     # Refused before reading the YAML: no `devices/get_config` reached the Device Builder.
     assert builder.reads[reads:] == []
@@ -198,3 +202,22 @@ async def test_a_new_sw_version_that_gives_no_version_is_warned_about(
     assert _installed(hass) == (STATE_UNKNOWN, None)
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert any("custom firmware" in w and "ESPHome version" in w for w in warnings)
+
+
+async def test_the_linked_device_entry_is_left_as_its_integration_made_it(
+    hass: HomeAssistant, builder: FakeDeviceBuilder, device_registry: dr.DeviceRegistry
+) -> None:
+    device = _esphome_device(hass, "2026.10.0 (config hash 0x1a2b3c4d)")
+    _entity_of(hass, device, "-60")
+    await _set_up(hass, builder, device)
+
+    await install(hass, builder, "install_clean_success")
+
+    after = device_registry.async_get(device.id)
+    assert isinstance(after, dr.DeviceEntry)
+    assert (after.manufacturer, after.model, after.sw_version, after.configuration_url) == (
+        None,
+        None,
+        "2026.10.0 (config hash 0x1a2b3c4d)",
+        None,
+    )

@@ -10,7 +10,6 @@ from typing import Any
 import probatio
 from homeassistant.config_entries import (
     SOURCE_RECONFIGURE,
-    ConfigEntry,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
@@ -37,6 +36,7 @@ from homeassistant.util import slugify
 
 from .connection import connect_to_device_builder
 from .const import CONF_CONFIGURATION, DOMAIN, LINKED_DEVICE_DOMAINS
+from .coordinator import EsphomeGitUpdatesConfigEntry
 from .device_builder import (
     CONNECTION_ERRORS,
     AuthenticationFailed,
@@ -106,7 +106,9 @@ class EsphomeGitUpdatesConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     @staticmethod
-    def async_get_options_flow(config_entry: ConfigEntry) -> EsphomeGitUpdatesOptionsFlow:
+    def async_get_options_flow(
+        config_entry: EsphomeGitUpdatesConfigEntry,
+    ) -> EsphomeGitUpdatesOptionsFlow:
         """The options of a Tracked Config."""
         return EsphomeGitUpdatesOptionsFlow()
 
@@ -340,6 +342,11 @@ class EsphomeGitUpdatesConfigFlow(ConfigFlow, domain=DOMAIN):
 
 class EsphomeGitUpdatesOptionsFlow(OptionsFlow):
     """How a Tracked Config is installed and polled, and the GitHub token for release notes."""
+
+    @property
+    def config_entry(self) -> EsphomeGitUpdatesConfigEntry:
+        """The Tracked Config's entry, typed with its runtime data."""
+        return super().config_entry
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show the options, filled in with the ones set."""

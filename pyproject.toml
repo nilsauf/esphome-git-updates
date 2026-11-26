@@ -5,7 +5,7 @@ requires-python = ">=3.13"
 dependencies = ["aiohttp>=3.9"]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "pytest-homeassistant-custom-component", "mypy", "types-PyYAML", "ruff==0.17.4"]
+dev = ["pytest", "pytest-asyncio", "pytest-cov", "pytest-homeassistant-custom-component", "mypy", "types-PyYAML", "ruff==0.17.4"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -23,14 +23,15 @@ src = [".", "custom_components/esphome_git_updates", "scripts", "tests"]
 # `device_builder.py` has two module names: the integration imports it as part
 # of the package, and the standalone CLI (plus its tests) as top-level
 # `device_builder`. mypy can only check one of them per run, so this config
-# checks the integration; check the spike with:
+# checks the integration, and CI checks the standalone CLI separately with:
 #   MYPYPATH=custom_components/esphome_git_updates:scripts:tests mypy --config-file /dev/null \
 #     --strict scripts/device_builder_cli.py tests/test_cli.py tests/test_device_builder.py
 strict = true
 explicit_package_bases = true
-mypy_path = ".:tests"
+mypy_path = ".:tests:scripts"
 files = [
     "custom_components/esphome_git_updates",
+    "scripts/check_module_coverage.py",
     "tests/conftest.py",
     "tests/fake_device_builder.py",
     "tests/fake_github.py",
@@ -48,6 +49,7 @@ files = [
     "tests/test_installed_record.py",
     "tests/test_installed_record_format.py",
     "tests/test_linked_device.py",
+    "tests/test_module_coverage.py",
     "tests/test_packaging.py",
     "tests/test_pre_install_checks.py",
     "tests/test_progress.py",
