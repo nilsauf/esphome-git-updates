@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -17,6 +19,9 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
     device_registry as dr,
+)
+from homeassistant.helpers import (
+    entity_platform,
 )
 from homeassistant.helpers import (
     entity_registry as er,
@@ -45,6 +50,7 @@ from stored_record import record_an_install, recorded_esphome_version, stored_re
 from tracked_config import OTA
 
 ENTITY_ID = "update.host_node_firmware"
+INTEGRATION = Path(__file__).resolve().parent.parent / "custom_components" / DOMAIN
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -106,6 +112,17 @@ async def test_the_add_on_ingress_port_is_looked_up_again_when_the_entry_is_set_
     assert state.attributes["latest_version"] == "2026.11.0"
 
 
+async def test_the_update_platform_declares_no_parallel_update_limit(
+    hass: HomeAssistant, builder: tuple[str, FakeDeviceBuilder]
+) -> None:
+    """Polling is the coordinators' job and Installs are serialized by the Install runner."""
+    await _set_up(hass, builder[0])
+
+    [platform] = entity_platform.async_get_platforms(hass, DOMAIN)
+    assert platform.domain == "update"
+    assert getattr(platform.platform, "PARALLEL_UPDATES", None) == 0
+
+
 async def test_a_new_entry_assumes_the_device_runs_the_available_version(
     hass: HomeAssistant, builder: tuple[str, FakeDeviceBuilder]
 ) -> None:
@@ -132,6 +149,25 @@ async def test_the_entity_sits_on_a_device_the_integration_creates(
     assert [d.name for d in devices] == ["host-node"]
     entities = er.async_entries_for_config_entry(entity_registry, entry.entry_id)
     assert [(e.entity_id, e.device_id) for e in entities] == [(ENTITY_ID, devices[0].id)]
+
+
+async def test_the_entity_carries_the_translation_key_its_icon_definitions_use(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+    entity_registry: er.EntityRegistry,
+) -> None:
+    url, _ = builder
+    await _set_up(hass, url)
+
+    entity = entity_registry.async_get(ENTITY_ID)
+    assert entity is not None
+    assert entity.translation_key == "firmware"
+    icons = json.loads((INTEGRATION / "icons.json").read_text())
+    assert entity.translation_key in icons["entity"]["update"]
+    # Still named by its device class, which the update component translates.
+    state = hass.states.get(ENTITY_ID)
+    assert state is not None
+    assert state.attributes["friendly_name"] == "host-node Firmware"
 
 
 async def test_an_update_is_offered_when_the_available_version_differs_from_the_installed_one(
