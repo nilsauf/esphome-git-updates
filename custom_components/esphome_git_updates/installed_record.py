@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Collection, Mapping
-from typing import NamedTuple, NotRequired, Protocol, TypedDict
+from typing import Any, NamedTuple, NotRequired, Protocol, TypedDict
 
 from .const import DOMAIN
 from .device_builder import OTA, ActiveJob, Stage
@@ -158,6 +158,25 @@ class InstalledRecord:
             changed = True
         if changed:
             await self._storage.async_save(self._data)
+
+    def diagnostics(self) -> dict[str, Any]:
+        """What the record holds, for a diagnostics download: the Installed ESPHome
+        Version, Installed Commits and Installed Tags, and the active Install, if any."""
+        active = self.active_install
+        return {
+            "installed_esphome_version": self._data.get("installed_esphome_version"),
+            "installed_commits": dict(self._data.get("installed_commits", {})),
+            "installed_tags": dict(self._data.get("installed_tags", {})),
+            "active_install": None
+            if active is None
+            else {
+                "jobs": [{"job_id": job.job_id, "stage": str(job.stage)} for job in active.jobs],
+                "commits": dict(active.plan.commits),
+                "port": active.plan.port,
+                "clean_build": active.plan.clean_build,
+                "tags": dict(active.plan.tags),
+            },
+        }
 
     @property
     def active_install(self) -> ActiveInstall | None:
