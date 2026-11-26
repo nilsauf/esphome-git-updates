@@ -1,6 +1,6 @@
 # 01: Drop the core ESPHome Device Builder fallback
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 **Blocked by:** None (can start immediately)
 
@@ -41,3 +41,7 @@ Resolving an add-on (auto) location (`async_resolve_location`) first asks the Su
 - The `update_config` ref rewriting on Install (the reviewer approved it).
 - Historical spec and ticket files under `.scratch/` that mention the fallback.
 - Cutting a release or commenting on hacs/default#14478 (the maintainer does that).
+
+## Comments
+
+Implemented and merged into `hacs-review` (2026-11-26), followed by the code-review fixes merge.

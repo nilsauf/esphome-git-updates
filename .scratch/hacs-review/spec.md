@@ -1,6 +1,6 @@
 # HACS review: drop the core ESPHome fallback: spec
 
-Status: ready-for-agent
+Status: resolved
 
 Source: HACS default-repository submission [hacs/default#14478](https://github.com/hacs/default/pull/14478), review [6071861836](https://github.com/hacs/default/pull/14478#pullrequestreview-6071861836) by frenck, 2026-11-26, CHANGES_REQUESTED.
 
