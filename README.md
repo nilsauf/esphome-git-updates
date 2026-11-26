@@ -8,25 +8,91 @@ Terms used here (Tracked Config, Git Source, Floating Ref, Tag Ref, Unset Ref, V
 
 - Home Assistant 2026.10.0 or newer.
 - An ESPHome Device Builder: the ESPHome add-on or a standalone `esphome dashboard`.
-- For the "add-on (auto)" location mode: a Home Assistant install with Supervisor.
+- For the **ESPHome add-on (auto)** choice during setup: a Home Assistant install with Supervisor.
 
 ## Install with HACS
 
 1. In HACS, open the menu (⋮) → **Custom repositories**.
 2. Add `https://github.com/nilsauf/esphome-git-updates` with type **Integration**.
 3. Search HACS for **ESPHome Git Updates**, download it, and restart Home Assistant.
-4. Go to **Settings → Devices & services → Add integration** and pick **ESPHome Git Updates**.
+4. Set it up as described under [Setup](#setup).
 
 HACS offers new versions of the integration itself as they are released.
 
-## Device Builder location
+## Setup
 
-The config flow asks where the Device Builder runs. **add-on (auto)** is offered only when Home Assistant has Supervisor:
+Go to **Settings → Devices & services → Add integration** and pick **ESPHome Git Updates**. Each pass through setup adds one Tracked Config: one Configuration, with its own config entry and update entity. Add the integration again for each further Configuration.
 
-- **add-on (auto)**: on a Supervisor install, the integration finds the ESPHome add-on itself and talks to it on its internal port, with no login. If your add-on has a non-standard slug, you can override it. If the add-on can't be found, the integration falls back to the Device Builder address that Home Assistant's own ESPHome integration discovered.
-- **manual**: enter the Device Builder's base URL, for example `http://192.168.1.10:6052`. Add a username and password only if the Device Builder asks for a login. Use this for a standalone Device Builder, or when Supervisor isn't available.
+### 1. Where the Device Builder runs
 
-Then pick the Configuration to track. Add the integration once for each Tracked Config.
+On a Home Assistant install with Supervisor, setup first asks where the Device Builder runs:
+
+- **ESPHome add-on (auto)**: use the ESPHome add-on on this Home Assistant. The integration finds it through Supervisor and talks to it on its internal (ingress) port, so no login is needed. It asks for one field:
+  - **Add-on slug** (required, default `5c53de3b_esphome`, the ESPHome add-on from the official ESPHome add-on repository). Change it only if your ESPHome add-on comes from another repository; its slug is the last part of the add-on page's address in Home Assistant (`/hassio/addon/<slug>`). If no add-on with this slug is found, the integration uses the Device Builder that Home Assistant's own ESPHome integration discovered instead, and refuses only if there is neither.
+- **Manual URL**: enter where the Device Builder runs. Use this for a standalone `esphome dashboard`, or a Device Builder on another machine.
+
+Without Supervisor, setup goes straight to the **Manual URL** form:
+
+- **URL** (required): the Device Builder's base URL, for example `http://192.168.1.10:6052`.
+- **Username** and **Password** (optional): only needed if the Device Builder asks for a login. Leave both empty otherwise.
+
+Setup then connects to the Device Builder and lists its Configurations. It shows an error and lets you correct the form if the Device Builder cannot be reached, refuses the username or password, or runs a version this integration does not support. It stops if the Device Builder has no Configurations.
+
+### 2. The Configuration
+
+- **Configuration** (required): the ESPHome configuration to watch for updates, picked from those the Device Builder lists (by their friendly name, or their name). This becomes the Tracked Config, and the entry is named after it. A Configuration that is already tracked is refused.
+
+### 3. The Linked Device
+
+- **Device** (optional): the device the Configuration already has in Home Assistant, from the ESPHome or MQTT integration. Only devices of those two integrations can be picked. When exactly one of them is named like the Configuration (its `esphome: name:` or friendly name), it is filled in for you.
+
+With a Linked Device, the update entity is added to that device, the Installed ESPHome Version is the firmware version the device reports, and an Install is refused while every other entity of the device is unavailable (see [Install](#install)).
+
+Leave it empty to give the update entity a device of its own, named after the entry. The integration then cannot see what the device runs: it assumes the device already runs the Device Builder's ESPHome version at setup, so it offers an ESPHome update only once that version changes, and after that the Installed ESPHome Version is what the last successful Install built. Installs are not checked for an offline device. The Linked Device cannot be changed later; remove the entry and add it again to change it.
+
+## Options
+
+Open the entry's options with **Configure** on **Settings → Devices & services → ESPHome Git Updates**. Changing an option does not reload the entry, so it never interrupts a running Install.
+
+| Option | Default | What it does |
+| --- | --- | --- |
+| **Clean Build** | off | Before each compile, delete the build directory, on the Device Builder and on any remote build servers it uses. It does not fetch Git Sources again: that takes `refresh: always` in the YAML (see [`refresh: always`](#refresh-always)). Applies from the next Install. |
+| **Git poll interval** | 30 minutes | How often, in whole minutes (at least 1), the YAML is read again and each Git Source's remote is asked for its latest commits and tags. Saving a new interval polls right away, then at the new interval. The ESPHome version is polled every 5 minutes regardless. |
+| **Upload address** | `OTA` | Where an Install uploads the firmware. `OTA` (over the air) uploads over the network to the device's own address, the one ESPHome works out from the Configuration. Enter an IP address or hostname to upload there instead, for example when the device's name does not resolve on your network. Leaving it empty means `OTA`. Applies from the next Install. |
+| **GitHub token** | none | Optional. A GitHub personal access token, used only to ask GitHub for Releases and for the commits listed in the release notes. Without it, GitHub allows 60 requests an hour from your IP address, shared by every Tracked Config; with it, the limit is much higher. A fine-grained token with no permissions is enough for public repositories. Clear the field to remove the token. Git remotes themselves are polled without it. |
+
+## Reconfigure
+
+When the Device Builder moves (a new address, new login, or a switch between the ESPHome add-on and a standalone Device Builder), change the entry's Device Builder Location instead of removing it: on **Settings → Devices & services → ESPHome Git Updates**, open the entry's ⋮ menu and choose **Reconfigure**.
+
+- On a Home Assistant install with Supervisor, or when the entry uses the add-on, it first asks again for **ESPHome add-on (auto)** or **Manual URL**; otherwise it opens the **Manual URL** form directly. The form of the entry's current choice is filled in with its current values.
+- The fields are the same as in [setup](#1-where-the-device-builder-runs), and are checked the same way. The Device Builder at the new location must also list the entry's Configuration; if it does not, reconfigure stops and nothing is changed.
+- Switching between the add-on and a URL replaces the location entirely: switching to the add-on forgets the stored URL, username and password, and switching to a URL forgets the add-on slug.
+- Everything else is kept: the Tracked Config, the entry's name, its Linked Device, its options, the update entity and its entity ID, and its Installed Record (what the last Install installed). To track a different Configuration, add the integration again.
+
+Saving reloads the entry. That also ends a wait for new credentials (see [Troubleshooting](#waiting-for-credentials-reauthentication-and-reconfigure)).
+
+**A running Install.** The Install runs on the Device Builder, so the reload does not stop it, but an `update.install` action still waiting for it fails with "was interrupted". After the reload the integration follows the Install again, at the new location:
+
+- If the new location reaches the same Device Builder (for example under a new address), it still knows the Install, which is followed to the end with its progress and notification as usual.
+- If it is a different Device Builder, it does not know the Install. The Install ends with the notification *\<title\>: Install outcome unknown* and nothing is recorded, so the update is still offered. The old Device Builder may still finish flashing the device. Install again once it has.
+
+## Removal
+
+To stop tracking one Configuration, remove its entry: on **Settings → Devices & services → ESPHome Git Updates**, open the entry's ⋮ menu and choose **Delete**. With the entry goes:
+
+- its update entity, and its own device if it has no Linked Device (a Linked Device stays, as it belongs to the ESPHome or MQTT integration);
+- its Installed Record: the Installed ESPHome Version, Installed Commits and Installed Tags, and any Install it was still following;
+- its Repair issues.
+
+Nothing outside Home Assistant is changed: the Configuration's YAML stays on the Device Builder as it is, including Tag Refs an Install rewrote, and the device keeps its firmware. An Install's last notification stays until you dismiss it. Adding the same Configuration again later starts a new entry with a new Installed Record.
+
+To remove the integration itself:
+
+1. Delete every ESPHome Git Updates entry as above.
+2. In HACS, find **ESPHome Git Updates**, open its menu (⋮) and choose **Remove**.
+3. Restart Home Assistant.
+4. Optionally, remove `https://github.com/nilsauf/esphome-git-updates` from HACS's **Custom repositories**.
 
 ## Requirements on the Configuration
 
@@ -252,7 +318,7 @@ The last three share one Repair issue per Tracked Config, which shows one proble
 When a Device Builder reached by URL rejects the stored username or password, the integration logs a warning that it is asking for new credentials and pausing polls, stops connecting to the Device Builder (polls fail with `waiting for new Device Builder credentials`), makes the update entity unavailable, and Home Assistant shows **Re-authenticate** for the entry under **Settings → Devices & services**. Retrying would only get the Device Builder to answer with a rate limit, so nothing is tried until you act. An entry using the add-on has no credentials to re-enter: a rejected login is logged as an error and polling continues.
 
 - **Reauthentication** asks only for the new username and password, checks them against the same Device Builder, saves them and reloads the entry. Use it when the Device Builder's login changed.
-- **Reconfigure** (the entry's ⋮ menu → **Reconfigure**) changes the Device Builder Location itself: a new URL, new credentials, or a switch between the add-on and a URL. The new location is tested and must list the Tracked Config's Configuration. Saving reloads the entry, which also ends a wait for credentials. Use it when the Device Builder moved.
+- **Reconfigure** (the entry's ⋮ menu → **Reconfigure**) changes the Device Builder Location itself: a new URL, new credentials, or a switch between the add-on and a URL. Saving reloads the entry, which also ends a wait for credentials. Use it when the Device Builder moved; see [Reconfigure](#reconfigure).
 
 Both keep the Tracked Config, its entity and its Installed Record.
 
@@ -264,7 +330,7 @@ The entity is unavailable while the Device Builder's ESPHome version cannot be p
 - the entry is waiting for new credentials (see above);
 - the Device Builder reports an unsupported version or sends an unexpected answer (see the Repair issues above).
 
-It becomes available again with the next poll that succeeds. If the Device Builder cannot be reached when the integration is set up, Home Assistant retries the setup later. A Git poll that fails (an unreadable YAML, an unreachable git remote or GitHub) does not make the entity unavailable: it keeps what the last good poll showed and logs why. If the Device Builder moved, use **Reconfigure**.
+It becomes available again with the next poll that succeeds. If the Device Builder cannot be reached when the integration is set up, Home Assistant retries the setup later. A Git poll that fails (an unreadable YAML, an unreachable git remote or GitHub) does not make the entity unavailable: it keeps what the last good poll showed and logs why. If the Device Builder moved, use [Reconfigure](#reconfigure).
 
 ### Diagnostics
 
