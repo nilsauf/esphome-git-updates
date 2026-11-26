@@ -27,6 +27,13 @@ jobs:
         run: ruff format --check .
       - name: Typecheck
         run: mypy
+      - name: Typecheck the standalone CLI
+        # device_builder.py has two module names; see [tool.mypy] in pyproject.toml.
+        env:
+          MYPYPATH: custom_components/esphome_git_updates:scripts:tests
+        run: >
+          mypy --config-file /dev/null --strict
+          scripts/device_builder_cli.py tests/test_cli.py tests/test_device_builder.py
       - name: Test
         run: pytest -q
 

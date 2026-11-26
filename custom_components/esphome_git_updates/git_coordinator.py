@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
@@ -100,22 +101,16 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
         """
         title = self.config_entry.title
         if device_offline:
-            raise HomeAssistantError(
-                f"Install of {title} refused: device offline "
-                "(every entity of its Linked Device is unavailable)"
-            )
+            raise _refused(title, "install_refused_device_offline")
         try:
             snapshot = await self._async_poll_now()
         except Exception as err:
             # As after a failed scheduled poll, the last good poll stays.
-            raise HomeAssistantError(
-                f"Install of {title} refused: cannot read its YAML to check "
-                f"it before installing: {err}"
-            ) from err
+            raise _refused(title, "install_refused_unreadable_yaml", {"error": str(err)}) from err
         self.async_set_updated_data(snapshot)
-        plan_or_refusal = snapshot.install(options.upload_address, options.clean_build, title)
+        plan_or_refusal = snapshot.install(options.upload_address, options.clean_build)
         if isinstance(plan_or_refusal, Refusal):
-            raise HomeAssistantError(plan_or_refusal.message)
+            raise _refused(title, plan_or_refusal.translation_key, plan_or_refusal.placeholders)
         return plan_or_refusal
 
     async def async_set_poll_interval(self, interval: timedelta) -> None:
@@ -197,3 +192,14 @@ def _reader(client: DeviceBuilderClient, configuration: str, files: dict[str, st
         return files[path]
 
     return read
+
+
+def _refused(
+    title: str, translation_key: str, placeholders: Mapping[str, str] | None = None
+) -> HomeAssistantError:
+    """The translated error refusing an Install of *title*."""
+    return HomeAssistantError(
+        translation_domain=DOMAIN,
+        translation_key=translation_key,
+        translation_placeholders={"title": title, **(placeholders or {})},
+    )
