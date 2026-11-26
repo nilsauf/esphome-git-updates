@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, assert_never
 
 from homeassistant.components import persistent_notification
 from homeassistant.components.update import (
@@ -22,7 +22,15 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import CONF_CONFIGURATION, DOMAIN
 from .coordinator import EsphomeGitUpdatesConfigEntry, EsphomeVersionCoordinator
 from .git_coordinator import GitSourcesCoordinator
-from .install import ActiveInstall, Installed, InstallEnding, InstallRunner
+from .install import (
+    ActiveInstall,
+    DeviceOffline,
+    Failed,
+    Installed,
+    InstallEnding,
+    InstallRunner,
+    OutcomeUnknown,
+)
 from .installed_record import InstalledRecord
 from .linked_device import LinkedDevice
 from .options import Options
@@ -153,10 +161,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         # Not awaited directly: cancelling the action must not cancel the Install.
         await asyncio.wait([task])
         if task.cancelled():
-            raise HomeAssistantError(
-                f"Install of {self._entry.title} was interrupted; "
-                "it is picked up again when the integration is set up"
-            )
+            raise self._error("install_interrupted")
         task.result()
 
     def _set_state(self, in_progress: bool, percentage: int | None) -> None:
@@ -203,7 +208,28 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
             self._notify(*ending.notification)
         # Nobody waits for a re-attached Install: its notification says how it went.
         if not isinstance(ending, Installed) and not reattached:
-            raise HomeAssistantError(f"Install of {self._entry.title} {ending.summary}")
+            raise self._ending_error(ending)
+
+    def _ending_error(self, ending: Failed | DeviceOffline | OutcomeUnknown) -> HomeAssistantError:
+        """The translated error failing the Install action with *ending*."""
+        match ending:
+            case Failed(stage=stage, error=error):
+                return self._error("install_failed", {"stage": str(stage), "error": error})
+            case DeviceOffline():
+                return self._error("install_failed_device_offline")
+            case OutcomeUnknown():
+                return self._error("install_outcome_unknown")
+            case _:
+                assert_never(ending)
+
+    def _error(
+        self, translation_key: str, placeholders: dict[str, str] | None = None
+    ) -> HomeAssistantError:
+        return HomeAssistantError(
+            translation_domain=DOMAIN,
+            translation_key=translation_key,
+            translation_placeholders={"title": self._entry.title, **(placeholders or {})},
+        )
 
     def _notify(self, headline: str, message: str) -> None:
         persistent_notification.async_create(

@@ -128,6 +128,18 @@
     },
     "install_refused_missing_ota_and_refresh_policy": {
       "message": "Install of {title} refused: its YAML has no `ota:` platform {platforms}, so it cannot be updated over the air; flash it once over USB with OTA enabled; and the Git Sources {sources} lack `refresh: always`, so ESPHome may build a stale cached clone. See Repairs"
+    },
+    "install_interrupted": {
+      "message": "Install of {title} was interrupted; it is picked up again when the integration is set up"
+    },
+    "install_failed": {
+      "message": "Install of {title} failed at {stage}: {error}"
+    },
+    "install_failed_device_offline": {
+      "message": "Install of {title} failed: device offline"
+    },
+    "install_outcome_unknown": {
+      "message": "Install of {title} has an unknown outcome"
     }
   }
 }
