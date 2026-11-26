@@ -203,12 +203,10 @@ async def test_diagnostics_of_a_running_install_show_its_plan_without_git_creden
         compiled = asyncio.Event()
         fake.waits = {"c1": compiled}
         fake.jobs = {"c1": job_events("[50/100] Compiling", status=None)}
-        await set_up(hass, fake)
+        entry = await set_up(hass, fake)
         await asyncio.wait_for(fake.waiting.wait(), 1)
 
-        diagnostics = await get_diagnostics_for_config_entry(
-            hass, hass_client, hass.config_entries.async_get_entry("tracked")
-        )
+        diagnostics = await get_diagnostics_for_config_entry(hass, hass_client, entry)
 
         fake.jobs["c1"] = job_events("[100/100] Linking firmware.elf", status="failed")
         compiled.set()
