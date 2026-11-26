@@ -1,5 +1,6 @@
 """Config flow: locate the Device Builder, pick one Tracked Config (ADR-0001), then
-optionally its Linked Device (ADR-0005)."""
+optionally its Linked Device (ADR-0005). Reconfiguring changes only the Device
+Builder Location."""
 
 from __future__ import annotations
 
@@ -8,11 +9,13 @@ from typing import Any
 
 import probatio
 from homeassistant.config_entries import (
+    SOURCE_RECONFIGURE,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
 )
 from homeassistant.const import CONF_DEVICE_ID, CONF_PASSWORD, CONF_URL, CONF_USERNAME
+from homeassistant.core import callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.hassio import is_hassio
 from homeassistant.helpers.selector import (
@@ -40,7 +43,12 @@ from .device_builder import (
     Configuration,
     UnsupportedServerVersion,
 )
-from .location import CONF_ADDON_SLUG, DEFAULT_ADDON_SLUG, DeviceBuilderNotFound
+from .location import (
+    CONF_ADDON_SLUG,
+    DEFAULT_ADDON_SLUG,
+    DeviceBuilderNotFound,
+    is_manual_location,
+)
 from .options import (
     CONF_CLEAN_BUILD,
     CONF_GIT_POLL_INTERVAL,
@@ -122,6 +130,18 @@ class EsphomeGitUpdatesConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_manual(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Ask for a manual Device Builder URL and optional credentials."""
         return await self._async_step_location("manual", MANUAL_SCHEMA, user_input)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Change where the entry's Device Builder is reached, keeping its Tracked Config.
+
+        The same choice as setup: the add-on menu where there is one to offer.
+        """
+        entry = self._get_reconfigure_entry()
+        if is_hassio(self.hass) or not is_manual_location(entry.data):
+            return self.async_show_menu(step_id="reconfigure", menu_options=["addon", "manual"])
+        return await self.async_step_manual()
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
         """The Device Builder rejected the stored credentials: ask for new ones."""
@@ -272,15 +292,47 @@ class EsphomeGitUpdatesConfigFlow(ConfigFlow, domain=DOMAIN):
             except CONNECTION_ERRORS:
                 errors["base"] = "cannot_connect"
             else:
+                if self.source == SOURCE_RECONFIGURE:
+                    return self._async_save_location(user_input, configurations)
                 if not configurations:
                     return self.async_abort(reason="no_configurations")
                 self._location = user_input
                 self._configurations = {c.configuration: c for c in configurations}
                 return await self.async_step_configuration()
+        if user_input is None and self.source == SOURCE_RECONFIGURE:
+            user_input = self._current_location(step_id, schema)
         return self.async_show_form(
             step_id=step_id,
             data_schema=self.add_suggested_values_to_schema(schema, user_input),
             errors=errors,
+        )
+
+    def _current_location(self, step_id: str, schema: probatio.Schema) -> dict[str, Any] | None:
+        """The reconfigured entry's location, when it is in *step_id*'s mode."""
+        data = self._get_reconfigure_entry().data
+        if (step_id == "manual") != is_manual_location(data):
+            return None
+        return {str(key): data[str(key)] for key in schema.schema if str(key) in data}
+
+    @callback
+    def _async_save_location(
+        self, location: dict[str, Any], configurations: list[Configuration]
+    ) -> ConfigFlowResult:
+        """Replace the entry's location, if the Device Builder there has its Tracked Config.
+
+        The data is replaced, not merged, so no key of the abandoned mode survives.
+        The reload clears a reauthentication pause and re-attaches a running Install.
+        """
+        entry = self._get_reconfigure_entry()
+        configuration = entry.data[CONF_CONFIGURATION]
+        if all(c.configuration != configuration for c in configurations):
+            return self.async_abort(
+                reason="configuration_not_listed",
+                description_placeholders={"configuration": configuration},
+            )
+        linked = {k: entry.data[k] for k in (CONF_DEVICE_ID,) if k in entry.data}
+        return self.async_update_reload_and_abort(
+            entry, data={**location, CONF_CONFIGURATION: configuration, **linked}
         )
 
     async def _list_configurations(self, location: dict[str, Any]) -> list[Configuration]:
