@@ -47,6 +47,24 @@ def test_strings_json_is_the_source_of_truth_and_keeps_the_runtime_copy_in_step(
     assert strings == runtime_copy
 
 
+def _placeholders_by_key(node: Any, prefix: str = "") -> dict[str, set[str]]:
+    """Map each string's dotted key path to the {placeholders} it uses."""
+    if isinstance(node, dict):
+        found: dict[str, set[str]] = {}
+        for key, value in node.items():
+            found |= _placeholders_by_key(value, f"{prefix}.{key}" if prefix else key)
+        return found
+    return {prefix: set(re.findall(r"\{(\w+)\}", node))}
+
+
+def test_german_translation_has_every_english_string_with_the_same_placeholders() -> None:
+    """A string added to en.json without a German one, or a German one that drops a placeholder, fails."""
+    english = _placeholders_by_key(_load(INTEGRATION / "translations" / "en.json"))
+    german = _placeholders_by_key(_load(INTEGRATION / "translations" / "de.json"))
+    assert german.keys() == english.keys()
+    assert {key: german[key] for key in english if german[key] != english[key]} == {}
+
+
 def test_no_owner_placeholder_remains() -> None:
     # The release workflow refuses to publish while the word OWNER appears in these files.
     for path in (INTEGRATION / "manifest.json", ROOT / "README.md"):

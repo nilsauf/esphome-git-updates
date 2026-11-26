@@ -9,14 +9,17 @@ A Home Assistant integration that offers firmware updates for ESPHome devices wh
 **Configuration**:
 A device YAML file that the Device Builder lists; files it pulls in with `!include` or local `packages:` are not Configurations.
 _Avoid_: device, node, YAML (when meaning the file the Device Builder manages)
+_German_: Konfiguration
 
 **Tracked Config**:
 A Configuration that the integration watches for updates; each has exactly one update entity.
 _Avoid_: project, firmware, node
+_German_: Überwachte Konfiguration
 
 **Linked Device**:
 The existing Home Assistant device (from the ESPHome or MQTT integration) that a Tracked Config's update entity is attached to.
 _Avoid_: target, host
+_German_: Verknüpftes Gerät
 
 **Device Builder**:
 The ESPHome add-on (or standalone server) that compiles and flashes firmware on the integration's behalf.
@@ -35,6 +38,7 @@ _Avoid_: dependency, input
 **Git Source**:
 An `external_components` or remote `packages:` entry of a Tracked Config that points at a git repository and ref.
 _Avoid_: component, repo, external component (when meaning the source)
+_German_: Git-Quelle
 
 **Followed Source**:
 A Git Source as last seen on its remote, together with what it follows (Releases, Version Tags or Latest Commit), which is decided anew on every poll.
@@ -59,6 +63,7 @@ _Avoid_: fixed ref, locked ref
 **Release**:
 A published GitHub release of a Git Source's repository that is neither a draft nor a prerelease and whose tag is a Version Tag; other hosts are taken to have no Releases.
 _Avoid_: version (when meaning the GitHub object)
+_German_: Release
 
 **Version Tag**:
 A git tag whose name reads as a version (such as `v1.2.3` or `1.2`) without a prerelease suffix; tags are ordered by that version, never by date.
@@ -95,10 +100,12 @@ How long ESPHome reuses its cached clone of a Git Source before fetching again; 
 **Install**:
 One update run for a Tracked Config: an "update YAML" step that rewrites any Tag Ref or Unset Ref moving to a newer version, then an optional Clean Build step, then compile, then over-the-air upload.
 _Avoid_: build, flash, update (when meaning the run)
+_German_: Installation
 
 **Clean Build**:
 An Install that first wipes the Tracked Config's build output and the build caches all configs share, locally and on each remote build server connected at that moment; it leaves cached Git Sources alone, so they are fetched only when their Refresh Policy says so.
 _Avoid_: fresh build, rebuild
+_German_: Sauberer Build
 
 **Deferred Install**:
 A Device Builder install that waits for an offline device to come back before flashing; the integration refuses these.

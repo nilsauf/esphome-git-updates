@@ -1,0 +1,160 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Device Builder",
+        "description": "Wo der ESPHome Device Builder läuft.",
+        "menu_options": {
+          "addon": "ESPHome Add-on (automatisch)",
+          "manual": "Manuelle URL"
+        }
+      },
+      "reconfigure": {
+        "title": "Device Builder",
+        "description": "Wo der ESPHome Device Builder für diese Konfiguration jetzt läuft. Die überwachte Konfiguration, ihre Update-Entität und was sie über die letzte Installation weiß, bleiben erhalten.",
+        "menu_options": {
+          "addon": "ESPHome Add-on (automatisch)",
+          "manual": "Manuelle URL"
+        }
+      },
+      "addon": {
+        "title": "ESPHome Add-on",
+        "description": "Das ESPHome Add-on dieses Home Assistant verwenden. Wird es über seinen Slug nicht gefunden, wird der Device Builder verwendet, den die ESPHome-Integration von Home Assistant gefunden hat.",
+        "data": {
+          "addon_slug": "Add-on-Slug"
+        },
+        "data_description": {
+          "addon_slug": "Ändere das nur, wenn dein ESPHome Add-on aus einem anderen als dem Standard-Repository stammt."
+        }
+      },
+      "manual": {
+        "title": "Device-Builder-URL",
+        "description": "Wo der ESPHome Device Builder läuft.",
+        "data": {
+          "url": "URL",
+          "username": "Benutzername",
+          "password": "Passwort"
+        },
+        "data_description": {
+          "url": "Die Basis-URL des Device Builders, zum Beispiel http://192.168.1.10:6052.",
+          "username": "Nur nötig, wenn der Device Builder eine Anmeldung verlangt.",
+          "password": "Nur nötig, wenn der Device Builder eine Anmeldung verlangt."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Erneut beim Device Builder anmelden",
+        "description": "Der Device Builder für {name} hat den gespeicherten Benutzernamen oder das Passwort abgelehnt. Gib die aktuellen Zugangsdaten ein.",
+        "data": {
+          "username": "Benutzername",
+          "password": "Passwort"
+        },
+        "data_description": {
+          "username": "Der Benutzername, den der Device Builder jetzt erwartet.",
+          "password": "Das Passwort, das der Device Builder jetzt erwartet."
+        }
+      },
+      "configuration": {
+        "title": "Überwachte Konfiguration",
+        "description": "Die ESPHome-Konfiguration, die auf Updates überwacht werden soll.",
+        "data": {
+          "configuration": "Konfiguration"
+        }
+      },
+      "device": {
+        "title": "Verknüpftes Gerät",
+        "description": "Das Gerät, das {name} in Home Assistant bereits hat, aus der ESPHome- oder MQTT-Integration. Die Update-Entität wird ihm hinzugefügt, und die ESPHome-Version, die es meldet, gilt als installierte Version. Leer lassen, um der Update-Entität ein eigenes Gerät zu geben.",
+        "data": {
+          "device_id": "Gerät"
+        }
+      }
+    },
+    "error": {
+      "addon_not_found": "Weder das ESPHome Add-on mit diesem Slug noch ein von der ESPHome-Integration von Home Assistant gefundener Device Builder wurde gefunden.",
+      "cannot_connect": "Verbindung zum Device Builder fehlgeschlagen.",
+      "invalid_auth": "Der Device Builder hat den Benutzernamen oder das Passwort abgelehnt.",
+      "unsupported_version": "Diese Version des Device Builders wird nicht unterstützt.",
+      "not_linkable_device": "Wähle ein Gerät der ESPHome- oder MQTT-Integration."
+    },
+    "abort": {
+      "already_configured": "Diese Konfiguration wird bereits überwacht.",
+      "no_configurations": "Der Device Builder hat keine Konfigurationen.",
+      "configuration_not_listed": "Dieser Device Builder listet {configuration} nicht, daher konnte dieser Eintrag sie nicht abfragen. Wähle den Device Builder, der {configuration} hat, oder füge die Konfiguration dort zuerst hinzu."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Optionen für Installation, Abfrage und Versionshinweise",
+        "data": {
+          "clean_build": "Sauberer Build",
+          "git_poll_interval": "Git-Abfrageintervall",
+          "upload_address": "Upload-Adresse",
+          "github_token": "GitHub-Token"
+        },
+        "data_description": {
+          "clean_build": "Löscht vor jedem Kompilieren das Build-Verzeichnis, lokal und auf verbundenen Remote-Build-Servern. Git-Quellen werden dadurch nicht neu abgerufen: Dafür braucht es `refresh: always` im YAML.",
+          "git_poll_interval": "Wie oft, in Minuten, das YAML neu gelesen und der neueste Commit jeder Git-Quelle abgerufen wird.",
+          "upload_address": "Wohin die Firmware hochgeladen wird. OTA lädt sie drahtlos an die eigene Adresse des Geräts hoch; gib eine IP-Adresse oder einen Hostnamen an, um stattdessen dorthin hochzuladen.",
+          "github_token": "Optional. Wird verwendet, um GitHub-Quellen auf Releases zu prüfen und ihre Commits in den Versionshinweisen aufzulisten; es erhöht das GitHub-Limit von 60 Anfragen pro Stunde. Für öffentliche Repositories genügt ein Fine-grained Token ohne Berechtigungen."
+        }
+      }
+    }
+  },
+  "issues": {
+    "unsupported_server_version": {
+      "title": "Nicht unterstützter Device Builder für {title}",
+      "description": "Der Device Builder, der {title} kompiliert, meldet Version {server_version}, die ESPHome Git Updates nicht unterstützt. Updates für {title} sind pausiert, bis der Device Builder eine unterstützte Version ausführt oder diese Integration aktualisiert wird."
+    },
+    "unexpected_frame": {
+      "title": "Unerwartete Antwort vom Device Builder für {title}",
+      "description": "Der Device Builder, der {title} kompiliert, hat etwas gesendet, das ESPHome Git Updates nicht versteht, daher sind Updates für {title} pausiert. Meist bedeutet das, dass der Device Builder sein Protokoll geändert hat. Details: {error}"
+    },
+    "missing_ota": {
+      "title": "{title} kann nicht drahtlos aktualisiert werden",
+      "description": "Das YAML von {title} hat keinen `ota:`-Eintrag mit der Plattform `esphome` oder `web_server`, daher verweigert ESPHome Git Updates die Installation. Füge einen hinzu, zum Beispiel:\n\n```yaml\nota:\n  - platform: esphome\n```\n\nund flashe {title} dann einmal über USB, damit die laufende Firmware drahtlose Updates annimmt. Dieses Problem verschwindet, sobald das YAML neu gelesen wird."
+    },
+    "refresh_policy": {
+      "title": "Git-Quellen von {title} sind möglicherweise veraltet",
+      "description": "Diesen Git-Quellen von {title} fehlt `refresh: always`: {sources}. ESPHome verwendet seinen zwischengespeicherten Klon einer Git-Quelle wieder, bis deren Refresh-Zeit abläuft (standardmäßig 1 Tag), daher könnte eine Installation einen alten Commit aus einem veralteten zwischengespeicherten Klon bauen und dabei den neuen festhalten. ESPHome Git Updates verweigert die Installation von {title}, bis jede von ihnen `refresh: always` (oder `0s`) setzt, zum Beispiel:\n\n```yaml\nexternal_components:\n  - source: github://owner/repo\n    refresh: always\n```\n\nAuch entfernte `packages:` akzeptieren `refresh: always`; ein `github://`-Kurzform-Package nicht, schreibe es daher als Mapping mit `url:`, `ref:`, `files:` und `refresh: always`. Dieses Problem verschwindet, sobald das YAML neu gelesen wird."
+    },
+    "include_refused": {
+      "title": "Device Builder hat das Lesen einer Datei von {title} verweigert",
+      "description": "{title} bindet {file} ein, aber der Device Builder hat das Lesen verweigert ({error}). Ohne diese Datei sieht ESPHome Git Updates nicht alle Git-Quellen von {title}, daher werden ihre Updates nicht mehr geprüft. Meist bedeutet das, dass der Device Builder jetzt einschränkt, welche Dateien gelesen werden dürfen. Wurde {file} entfernt oder umbenannt, korrigiere das Include im YAML."
+    }
+  },
+  "exceptions": {
+    "install_refused_device_offline": {
+      "message": "Installation von {title} verweigert: Gerät offline (jede Entität seines verknüpften Geräts ist nicht verfügbar)"
+    },
+    "install_refused_unreadable_yaml": {
+      "message": "Installation von {title} verweigert: Sein YAML kann vor der Installation nicht zur Prüfung gelesen werden: {error}"
+    },
+    "install_refused_missing_ota": {
+      "message": "Installation von {title} verweigert: Sein YAML hat keine `ota:`-Plattform {platforms}, daher kann es nicht drahtlos aktualisiert werden; flashe es einmal über USB mit aktiviertem OTA. Siehe Reparaturen"
+    },
+    "install_refused_refresh_policy": {
+      "message": "Installation von {title} verweigert: Den Git-Quellen {sources} fehlt `refresh: always`, daher baut ESPHome möglicherweise einen veralteten zwischengespeicherten Klon. Siehe Reparaturen"
+    },
+    "install_refused_missing_ota_and_refresh_policy": {
+      "message": "Installation von {title} verweigert: Sein YAML hat keine `ota:`-Plattform {platforms}, daher kann es nicht drahtlos aktualisiert werden; flashe es einmal über USB mit aktiviertem OTA; außerdem fehlt den Git-Quellen {sources} `refresh: always`, daher baut ESPHome möglicherweise einen veralteten zwischengespeicherten Klon. Siehe Reparaturen"
+    },
+    "install_interrupted": {
+      "message": "Installation von {title} wurde unterbrochen; sie wird fortgesetzt, sobald die Integration eingerichtet wird"
+    },
+    "install_failed": {
+      "message": "Installation von {title} fehlgeschlagen in Phase \"{stage}\": {error}"
+    },
+    "install_failed_device_offline": {
+      "message": "Installation von {title} fehlgeschlagen: Gerät offline"
+    },
+    "device_builder_unavailable": {
+      "message": "Device Builder für {title} kann nicht abgefragt werden: {error}"
+    },
+    "configuration_unreadable": {
+      "message": "Die Konfiguration {configuration} kann nicht gelesen werden: {error}"
+    },
+    "git_sources_unreadable": {
+      "message": "Die Git-Quellen von {configuration} können nicht gelesen werden: {error}"
+    }
+  }
+}
