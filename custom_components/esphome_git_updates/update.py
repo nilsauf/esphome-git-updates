@@ -24,7 +24,7 @@ from yarl import URL
 
 from .const import CONF_CONFIGURATION, DOMAIN
 from .coordinator import EsphomeGitUpdatesConfigEntry, EsphomeVersionCoordinator
-from .git_coordinator import GitSourcesCoordinator
+from .git_coordinator import GitSourcesCoordinator, install_error
 from .install import (
     ActiveInstall,
     DeviceOffline,
@@ -246,11 +246,7 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
     def _error(
         self, translation_key: str, placeholders: dict[str, str] | None = None
     ) -> HomeAssistantError:
-        return HomeAssistantError(
-            translation_domain=DOMAIN,
-            translation_key=translation_key,
-            translation_placeholders={"title": self._entry.title, **(placeholders or {})},
-        )
+        return install_error(self._entry.title, translation_key, placeholders)
 
     def _update_own_device_sw_version(self) -> None:
         """Keep the own device's software version at the Installed ESPHome Version:

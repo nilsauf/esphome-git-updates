@@ -101,16 +101,20 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
         """
         title = self.config_entry.title
         if device_offline:
-            raise _refused(title, "install_refused_device_offline")
+            raise install_error(title, "install_refused_device_offline")
         try:
             snapshot = await self._async_poll_now()
         except Exception as err:
             # As after a failed scheduled poll, the last good poll stays.
-            raise _refused(title, "install_refused_unreadable_yaml", {"error": str(err)}) from err
+            raise install_error(
+                title, "install_refused_unreadable_yaml", {"error": str(err)}
+            ) from err
         self.async_set_updated_data(snapshot)
         plan_or_refusal = snapshot.install(options.upload_address, options.clean_build)
         if isinstance(plan_or_refusal, Refusal):
-            raise _refused(title, plan_or_refusal.translation_key, plan_or_refusal.placeholders)
+            raise install_error(
+                title, plan_or_refusal.translation_key, plan_or_refusal.placeholders
+            )
         return plan_or_refusal
 
     @callback
@@ -213,10 +217,10 @@ def _poll_failed(translation_key: str, **placeholders: str) -> UpdateFailed:
     )
 
 
-def _refused(
+def install_error(
     title: str, translation_key: str, placeholders: Mapping[str, str] | None = None
 ) -> HomeAssistantError:
-    """The translated error refusing an Install of *title*."""
+    """The translated error refusing or failing an Install of *title*."""
     return HomeAssistantError(
         translation_domain=DOMAIN,
         translation_key=translation_key,
