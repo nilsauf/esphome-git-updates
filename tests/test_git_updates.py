@@ -290,8 +290,49 @@ async def test_a_device_builder_that_cannot_be_reached_fails_the_git_poll_withou
     await git.async_refresh()
 
     assert not git.last_update_success
-    assert str(git.last_exception).startswith("cannot reach the Device Builder: ")
+    assert isinstance(git.last_exception, HomeAssistantError)
+    assert git.last_exception.translation_domain == DOMAIN
+    assert git.last_exception.translation_key == "device_builder_unavailable"
+    assert git.last_exception.translation_placeholders is not None
+    assert git.last_exception.translation_placeholders["title"] == "host-node"
+    assert git.last_exception.translation_placeholders["error"].startswith(
+        "cannot reach the Device Builder: "
+    )
     assert list(issue_registry.issues) == []
+
+
+async def test_a_yaml_that_cannot_be_parsed_fails_the_git_poll_with_a_translated_error(
+    hass: HomeAssistant, builder: FakeDeviceBuilder
+) -> None:
+    entry = await set_up(hass, builder)
+    git = entry.runtime_data.git_coordinator
+    builder.files[CONFIGURATION] = "external_components: [\n"
+
+    await git.async_refresh()
+
+    assert isinstance(git.last_exception, HomeAssistantError)
+    assert git.last_exception.translation_domain == DOMAIN
+    assert git.last_exception.translation_key == "git_sources_unreadable"
+    assert git.last_exception.translation_placeholders is not None
+    assert git.last_exception.translation_placeholders["configuration"] == CONFIGURATION
+    assert git.last_exception.translation_placeholders["error"]
+
+
+async def test_a_configuration_the_device_builder_no_longer_has_fails_the_git_poll_translated(
+    hass: HomeAssistant, builder: FakeDeviceBuilder
+) -> None:
+    entry = await set_up(hass, builder)
+    git = entry.runtime_data.git_coordinator
+    del builder.files[CONFIGURATION]
+
+    await git.async_refresh()
+
+    assert isinstance(git.last_exception, HomeAssistantError)
+    assert git.last_exception.translation_domain == DOMAIN
+    assert git.last_exception.translation_key == "configuration_unreadable"
+    assert git.last_exception.translation_placeholders is not None
+    assert git.last_exception.translation_placeholders["configuration"] == CONFIGURATION
+    assert git.last_exception.translation_placeholders["error"]
 
 
 async def test_a_renamed_entry_logs_under_its_new_title(

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
-from typing import Any
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any, assert_never
 
 from homeassistant.components import persistent_notification
 from homeassistant.components.update import (
@@ -12,8 +12,10 @@ from homeassistant.components.update import (
     UpdateEntity,
     UpdateEntityFeature,
 )
+from homeassistant.const import CONF_URL
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo, EventDeviceRegistryUpdatedData
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_device_registry_updated_event
@@ -21,12 +23,25 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONF_CONFIGURATION, DOMAIN
 from .coordinator import EsphomeGitUpdatesConfigEntry, EsphomeVersionCoordinator
-from .git_coordinator import GitSourcesCoordinator
-from .install import ActiveInstall, Installed, InstallEnding, InstallRunner
+from .git_coordinator import GitSourcesCoordinator, install_error
+from .git_sources import without_userinfo
+from .install import (
+    ActiveInstall,
+    DeviceOffline,
+    Failed,
+    Installed,
+    InstallEnding,
+    InstallRunner,
+)
 from .installed_record import InstalledRecord
 from .linked_device import LinkedDevice
+from .location import is_manual_location
 from .options import Options
 from .versions import Versions
+
+# No per-entity limit: the coordinators do the polling, and Installs are
+# serialized by the Install runner, so there is nothing left to throttle.
+PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(
@@ -36,6 +51,14 @@ async def async_setup_entry(
 ) -> None:
     """Add the Tracked Config's one update entity."""
     async_add_entities([TrackedConfigUpdate(entry)])
+
+
+def _configuration_url(location: Mapping[str, Any]) -> str | None:
+    """The Device Builder address to show on the device: a manual URL without any
+    credentials; none for the add-on, whose ingress address is internal."""
+    if not is_manual_location(location):
+        return None
+    return without_userinfo(location[CONF_URL])
 
 
 class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEntity):
@@ -48,6 +71,10 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
 
     _attr_has_entity_name = True
     _attr_device_class = UpdateDeviceClass.FIRMWARE
+    # The key of the icon definitions in icons.json. strings.json deliberately
+    # has no name for it: unnamed, the entity is named by its device class,
+    # which the update component translates into every language HA ships.
+    _attr_translation_key = "firmware"
     # PROGRESS so that in_progress is the entity's own: a re-attached Install
     # runs outside async_install, and both set update_percentage (ticket 14).
     _attr_supported_features = (
@@ -76,7 +103,10 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
             self._attr_device_info = DeviceInfo(
                 identifiers={(DOMAIN, entry.entry_id)},
                 name=entry.title,
+                manufacturer="ESPHome",
                 model=entry.data[CONF_CONFIGURATION],
+                sw_version=self._installed_esphome(),
+                configuration_url=_configuration_url(entry.data),
             )
 
     async def async_added_to_hass(self) -> None:
@@ -149,15 +179,14 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         except BaseException:
             self._set_state(False, None)
             raise
-        task = self._start(lambda: self._runner.run(plan, self._set_percentage), reattached=False)
+        task = self._start(lambda: self._runner.run(plan, self._set_percentage))
         # Not awaited directly: cancelling the action must not cancel the Install.
         await asyncio.wait([task])
         if task.cancelled():
-            raise HomeAssistantError(
-                f"Install of {self._entry.title} was interrupted; "
-                "it is picked up again when the integration is set up"
-            )
-        task.result()
+            raise self._error("install_interrupted")
+        ending = task.result()
+        if not isinstance(ending, Installed):
+            raise self._ending_error(ending)
 
     def _set_state(self, in_progress: bool, percentage: int | None) -> None:
         """Write both Install attributes in one state change."""
@@ -170,11 +199,10 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
 
     def _reattach(self, active: ActiveInstall) -> None:
         """Finish the Install that was running when Home Assistant stopped (ADR-0002)."""
-        self._start(lambda: self._runner.reattach(active, self._set_percentage), reattached=True)
+        # Nobody waits for it: its notification says how it went.
+        self._start(lambda: self._runner.reattach(active, self._set_percentage))
 
-    def _start(
-        self, run: Callable[[], Awaitable[InstallEnding]], *, reattached: bool
-    ) -> asyncio.Task[None]:
+    def _start[E: InstallEnding](self, run: Callable[[], Awaitable[E]]) -> asyncio.Task[E]:
         """Run an Install as a task of the entry.
 
         Unloading the entry, as stopping Home Assistant does, cancels the task
@@ -183,11 +211,12 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
         self._set_state(True, 0)
         return self._entry.async_create_background_task(
             self.hass,
-            self._install(run, reattached),
+            self._install(run),
             f"{DOMAIN} install {self._entry.title}",
         )
 
-    async def _install(self, run: Callable[[], Awaitable[InstallEnding]], reattached: bool) -> None:
+    async def _install[E: InstallEnding](self, run: Callable[[], Awaitable[E]]) -> E:
+        """Run an Install to its end, then tell its outcome through a notification."""
         try:
             ending = await run()
         except asyncio.CancelledError:
@@ -197,13 +226,39 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
             self._set_state(False, None)
             raise
         self._set_state(False, None)
+        self._update_own_device_sw_version()
         if ending.notification is None:
             persistent_notification.async_dismiss(self.hass, self._notification_id)
         else:
             self._notify(*ending.notification)
-        # Nobody waits for a re-attached Install: its notification says how it went.
-        if not isinstance(ending, Installed) and not reattached:
-            raise HomeAssistantError(f"Install of {self._entry.title} {ending.summary}")
+        return ending
+
+    def _ending_error(self, ending: Failed | DeviceOffline) -> HomeAssistantError:
+        """The translated error failing the Install action with *ending*."""
+        match ending:
+            case Failed(stage=stage, error=error):
+                return self._error("install_failed", {"stage": str(stage), "error": error})
+            case DeviceOffline():
+                return self._error("install_failed_device_offline")
+            case _:
+                assert_never(ending)
+
+    def _error(
+        self, translation_key: str, placeholders: dict[str, str] | None = None
+    ) -> HomeAssistantError:
+        return install_error(self._entry.title, translation_key, placeholders)
+
+    def _update_own_device_sw_version(self) -> None:
+        """Keep the own device's software version at the Installed ESPHome Version:
+        HA reads device info only when the entity is added. A Linked Device is
+        owned by its integration and left alone."""
+        if self._linked is not None:
+            return
+        registry = dr.async_get(self.hass)
+        device = registry.async_get_device(identifiers={(DOMAIN, self._entry.entry_id)})
+        installed = self._installed_esphome()
+        if device is not None and device.sw_version != installed:
+            registry.async_update_device(device.id, sw_version=installed)
 
     def _notify(self, headline: str, message: str) -> None:
         persistent_notification.async_create(

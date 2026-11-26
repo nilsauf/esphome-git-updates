@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Collection, Mapping
-from typing import NamedTuple, NotRequired, Protocol, TypedDict
+from typing import Any, NamedTuple, NotRequired, Protocol, TypedDict
 
 from .const import DOMAIN
 from .device_builder import OTA, ActiveJob, Stage
+from .git_sources import without_userinfo
 from .install import ActiveInstall, InstallPlan
 from .versions import parse_sw_version
 
@@ -159,6 +160,28 @@ class InstalledRecord:
         if changed:
             await self._storage.async_save(self._data)
 
+    def diagnostics(self) -> dict[str, Any]:
+        """What the record holds, for a diagnostics download: the Installed ESPHome
+        Version, Installed Commits and Installed Tags, and the active Install, if any.
+
+        Every Git Source URL is cut free of the credentials it may carry.
+        """
+        active = self.active_install
+        return {
+            "installed_esphome_version": self._data.get("installed_esphome_version"),
+            "installed_commits": _by_url(self._data.get("installed_commits", {})),
+            "installed_tags": _by_url(self._data.get("installed_tags", {})),
+            "active_install": None
+            if active is None
+            else {
+                "jobs": [{"job_id": job.job_id, "stage": str(job.stage)} for job in active.jobs],
+                "commits": _by_url(active.plan.commits),
+                "port": active.plan.port,
+                "clean_build": active.plan.clean_build,
+                "tags": _by_url(active.plan.tags),
+            },
+        }
+
     @property
     def active_install(self) -> ActiveInstall | None:
         """The Install left running when Home Assistant last stopped, if any."""
@@ -202,3 +225,8 @@ class InstalledRecord:
         self._data["installed_tags"] = {**self._data.get("installed_tags", {}), **tags}
         self._data.pop("active_install", None)
         await self._storage.async_save(self._data)
+
+
+def _by_url(values: Mapping[str, str]) -> dict[str, str]:
+    """*values*, keyed by Git Source URLs (or Source keys), with those cut free of credentials."""
+    return {without_userinfo(key): value for key, value in values.items()}

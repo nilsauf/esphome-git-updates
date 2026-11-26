@@ -9,6 +9,14 @@
           "manual": "Manual URL"
         }
       },
+      "reconfigure": {
+        "title": "Device Builder",
+        "description": "Where the ESPHome Device Builder for this Configuration now runs. The Tracked Config, its update entity and what it remembers about the last Install are kept.",
+        "menu_options": {
+          "addon": "ESPHome add-on (auto)",
+          "manual": "Manual URL"
+        }
+      },
       "addon": {
         "title": "ESPHome add-on",
         "description": "Use the ESPHome add-on on this Home Assistant. If it can't be found by its slug, the Device Builder that Home Assistant's ESPHome integration discovered is used.",
@@ -47,7 +55,7 @@
       },
       "configuration": {
         "title": "Tracked Config",
-        "description": "The ESPHome configuration to watch for updates.",
+        "description": "The ESPHome Configuration to watch for updates.",
         "data": {
           "configuration": "Configuration"
         }
@@ -68,8 +76,9 @@
       "not_linkable_device": "Pick a device of the ESPHome or MQTT integration."
     },
     "abort": {
-      "already_configured": "This configuration is already tracked.",
-      "no_configurations": "The Device Builder has no configurations."
+      "already_configured": "This Configuration is already tracked.",
+      "no_configurations": "The Device Builder has no Configurations.",
+      "configuration_not_listed": "That Device Builder does not list {configuration}, so this entry could not poll it. Pick the Device Builder that has {configuration}, or add the Configuration there first."
     }
   },
   "options": {
@@ -111,6 +120,41 @@
     "include_refused": {
       "title": "Device Builder refused to read a file of {title}",
       "description": "{title} includes {file}, but the Device Builder refused to read it ({error}). Without it, ESPHome Git Updates cannot see every Git Source of {title}, so their updates are not refreshed. This usually means the Device Builder now restricts which files can be read. If {file} was removed or renamed, fix the include in the YAML."
+    }
+  },
+  "exceptions": {
+    "install_refused_device_offline": {
+      "message": "Install of {title} refused: device offline (every entity of its Linked Device is unavailable)"
+    },
+    "install_refused_unreadable_yaml": {
+      "message": "Install of {title} refused: cannot read its YAML to check it before installing: {error}"
+    },
+    "install_refused_missing_ota": {
+      "message": "Install of {title} refused: its YAML has no `ota:` platform {platforms}, so it cannot be updated over the air; flash it once over USB with OTA enabled. See Repairs"
+    },
+    "install_refused_refresh_policy": {
+      "message": "Install of {title} refused: the Git Sources {sources} lack `refresh: always`, so ESPHome may build a stale cached clone. See Repairs"
+    },
+    "install_refused_missing_ota_and_refresh_policy": {
+      "message": "Install of {title} refused: its YAML has no `ota:` platform {platforms}, so it cannot be updated over the air; flash it once over USB with OTA enabled; and the Git Sources {sources} lack `refresh: always`, so ESPHome may build a stale cached clone. See Repairs"
+    },
+    "install_interrupted": {
+      "message": "Install of {title} was interrupted; it is picked up again when the integration is set up"
+    },
+    "install_failed": {
+      "message": "Install of {title} failed at {stage}: {error}"
+    },
+    "install_failed_device_offline": {
+      "message": "Install of {title} failed: device offline"
+    },
+    "device_builder_unavailable": {
+      "message": "Cannot poll the Device Builder for {title}: {error}"
+    },
+    "configuration_unreadable": {
+      "message": "Cannot read the Configuration {configuration}: {error}"
+    },
+    "git_sources_unreadable": {
+      "message": "Cannot read the Git Sources of {configuration}: {error}"
     }
   }
 }

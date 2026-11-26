@@ -67,4 +67,8 @@ class EsphomeVersionCoordinator(DataUpdateCoordinator[str]):
             async with self._session.connect("version") as client:
                 return client.esphome_version
         except DeviceBuilderUnavailable as err:
-            raise UpdateFailed(str(err)) from err
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="device_builder_unavailable",
+                translation_placeholders={"title": self.config_entry.title, "error": str(err)},
+            ) from err

@@ -65,9 +65,20 @@ async def test_an_install_of_a_config_without_ota_is_refused_and_starts_no_job(
     await _set_up_with_an_update(hass, builder)
 
     # The polls' transcript: a firmware/install would be a mismatch.
-    with pytest.raises(HomeAssistantError):
+    with pytest.raises(HomeAssistantError) as refused:
         await press_install(hass)
 
+    assert refused.value.translation_domain == DOMAIN
+    assert refused.value.translation_key == "install_refused_missing_ota"
+    assert refused.value.translation_placeholders == {
+        "title": "host-node",
+        "platforms": "`esphome` or `web_server`",
+    }
+    assert str(refused.value) == (
+        "Install of host-node refused: its YAML has no `ota:` platform `esphome` or "
+        "`web_server`, so it cannot be updated over the air; flash it once over USB "
+        "with OTA enabled. See Repairs"
+    )
     assert builder.mismatches == []
     assert hass.states.get(ENTITY_ID).attributes["in_progress"] is False  # type: ignore[union-attr]
 
@@ -112,6 +123,44 @@ async def test_an_install_reads_the_yaml_again_so_a_fix_counts_without_waiting_f
     assert hass.states.get(ENTITY_ID).state == STATE_OFF  # type: ignore[union-attr]
 
 
+async def test_an_install_failing_both_checks_is_refused_naming_the_platforms_and_sources(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    marsrelay: GitRepo,
+) -> None:
+    builder.files[CONFIGURATION] = _config(marsrelay, ota="", refresh="1d")
+    await _set_up_with_an_update(hass, builder)
+
+    with pytest.raises(HomeAssistantError) as refused:
+        await press_install(hass)
+
+    assert refused.value.translation_domain == DOMAIN
+    assert refused.value.translation_key == "install_refused_missing_ota_and_refresh_policy"
+    assert refused.value.translation_placeholders == {
+        "title": "host-node",
+        "platforms": "`esphome` or `web_server`",
+        "sources": "marsrelay",
+    }
+    assert builder.mismatches == []
+
+
+async def test_an_install_of_a_git_source_without_refresh_always_is_refused_naming_it(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    marsrelay: GitRepo,
+) -> None:
+    builder.files[CONFIGURATION] = _config(marsrelay, refresh="1d")
+    await _set_up_with_an_update(hass, builder)
+
+    with pytest.raises(HomeAssistantError, match="the Git Sources marsrelay lack") as refused:
+        await press_install(hass)
+
+    assert refused.value.translation_domain == DOMAIN
+    assert refused.value.translation_key == "install_refused_refresh_policy"
+    assert refused.value.translation_placeholders == {"title": "host-node", "sources": "marsrelay"}
+    assert builder.mismatches == []
+
+
 async def test_a_config_that_passes_both_checks_installs_and_raises_no_issue(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,
@@ -132,8 +181,17 @@ async def test_an_install_is_refused_when_the_yaml_cannot_be_read_to_check_it(
     await _set_up_with_an_update(hass, builder)
     builder.files[CONFIGURATION] = "external_components: [\n"
 
-    with pytest.raises(HomeAssistantError, match="cannot read its YAML"):
+    with pytest.raises(HomeAssistantError, match="cannot read its YAML") as refused:
         await press_install(hass)
+
+    assert refused.value.translation_domain == DOMAIN
+    assert refused.value.translation_key == "install_refused_unreadable_yaml"
+    assert refused.value.translation_placeholders is not None
+    assert refused.value.translation_placeholders["title"] == "host-node"
+    # The poll's own translated message, not a bare parser error.
+    assert refused.value.translation_placeholders["error"].startswith(
+        "Cannot read the Git Sources of"
+    )
 
     assert builder.mismatches == []
 

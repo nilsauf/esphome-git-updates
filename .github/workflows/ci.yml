@@ -16,19 +16,26 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
+          cache-dependency-path: requirements_test.txt
       - name: Install dependencies
-        run: >
-          pip install
-          pytest-homeassistant-custom-component==0.13.375
-          mypy types-PyYAML ruff==0.17.4
+        run: pip install -r requirements_test.txt
       - name: Lint
         run: ruff check .
       - name: Format check
         run: ruff format --check .
       - name: Typecheck
         run: mypy
+      - name: Typecheck the standalone CLI
+        # device_builder.py has two module names; see [tool.mypy] in pyproject.toml.
+        env:
+          MYPYPATH: custom_components/esphome_git_updates:scripts:tests
+        run: >
+          mypy --config-file /dev/null --strict
+          scripts/device_builder_cli.py tests/test_cli.py tests/test_device_builder.py
       - name: Test
-        run: pytest -q
+        run: pytest -q --cov=custom_components/esphome_git_updates --cov-report=json
+      - name: Coverage of every module above 95%
+        run: python scripts/check_module_coverage.py coverage.json custom_components/esphome_git_updates
 
   hassfest:
     runs-on: ubuntu-latest

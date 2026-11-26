@@ -78,9 +78,6 @@ class ActiveInstall:
 # A notification's headline and message.
 Notification = tuple[str, str]
 
-# Every ending has a `summary` that completes "Install of <title> ...". The
-# entity fails the Install action with it for every ending but `Installed`.
-
 
 @dataclass(frozen=True)
 class Installed:
@@ -88,8 +85,6 @@ class Installed:
 
     # ESPHome's distinct warnings, in the order they first appeared.
     warnings: tuple[str, ...] = ()
-
-    summary = "succeeded"
 
     @property
     def notification(self) -> Notification | None:
@@ -108,10 +103,6 @@ class Failed:
     message: str
 
     @property
-    def summary(self) -> str:
-        return f"failed at {self.stage}: {self.error}"
-
-    @property
     def notification(self) -> Notification:
         return ("Install failed", self.message)
 
@@ -119,8 +110,6 @@ class Failed:
 @dataclass(frozen=True)
 class DeviceOffline:
     """The Device Builder would have deferred the Install; it was refused (spec step 4)."""
-
-    summary = "failed: device offline"
 
     @property
     def notification(self) -> Notification:
@@ -131,14 +120,14 @@ class DeviceOffline:
 class OutcomeUnknown:
     """A re-attached Install whose jobs the Device Builder no longer knows; nothing was recorded."""
 
-    summary = "has an unknown outcome"
-
     @property
     def notification(self) -> Notification:
         return ("Install outcome unknown", OUTCOME_UNKNOWN_TEXT)
 
 
-InstallEnding = Installed | Failed | DeviceOffline | OutcomeUnknown
+# How an Install started now ends; only a re-attached one can end with its outcome unknown.
+FreshInstallEnding = Installed | Failed | DeviceOffline
+InstallEnding = FreshInstallEnding | OutcomeUnknown
 
 
 class InstallBookkeeping(Protocol):
@@ -208,7 +197,9 @@ class InstallRunner:
         self._session = session
         self._bookkeeping = bookkeeping
 
-    async def run(self, plan: InstallPlan, on_percentage: Callable[[int], None]) -> InstallEnding:
+    async def run(
+        self, plan: InstallPlan, on_percentage: Callable[[int], None]
+    ) -> FreshInstallEnding:
         """Run an Install: write the plan's rewrites, then an optional Clean Build,
         then compile, then upload."""
 
@@ -238,7 +229,14 @@ class InstallRunner:
             )
 
         first_stage = active.jobs[0].stage
-        return await self._follow(active.plan, first_stage, start, on_percentage, reattached=True)
+        try:
+            return await self._follow(
+                active.plan, first_stage, start, on_percentage, reattached=True
+            )
+        except JobNotFound:
+            # Its jobs were pruned while Home Assistant was down.
+            await self._bookkeeping.async_clear_active_install()
+            return OutcomeUnknown()
 
     async def _follow(
         self,
@@ -248,7 +246,9 @@ class InstallRunner:
         on_percentage: Callable[[int], None],
         *,
         reattached: bool,
-    ) -> InstallEnding:
+    ) -> FreshInstallEnding:
+        """Follow an Install to its end. A re-attached one whose jobs the Device
+        Builder no longer knows raises `JobNotFound`."""
         observer = _Observer(self._bookkeeping, plan, on_percentage)
         log = observer.log
         try:
@@ -264,9 +264,7 @@ class InstallRunner:
                 esphome_version = client.esphome_version
         except JobNotFound as err:
             if reattached:
-                # Its jobs were pruned while Home Assistant was down.
-                await self._bookkeeping.async_clear_active_install()
-                return OutcomeUnknown()
+                raise
             return await self._failed(log, log.stage, str(err))
         except (DeviceBuilderUnavailable, CommandFailed) as err:
             return await self._failed(log, log.stage, str(err))
