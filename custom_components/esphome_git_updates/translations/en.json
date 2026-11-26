@@ -119,7 +119,7 @@
     },
     "include_refused": {
       "title": "Device Builder refused to read a file of {title}",
-      "description": "{title} includes {file}, but the Device Builder refused to read it ({error}). Without it, ESPHome Git Updates cannot see every Git Source of {title}, so their updates are not refreshed. This usually means the Device Builder now restricts which files can be read. If {file} was removed or renamed, fix the include in the YAML."
+      "description": "{title} includes {file}, but the Device Builder refused to read it ({error}). Without it, ESPHome Git Updates cannot see every Git Source of {title}, so their updates are no longer checked. This usually means the Device Builder now restricts which files can be read. If {file} was removed or renamed, fix the include in the YAML."
     }
   },
   "exceptions": {
@@ -142,7 +142,7 @@
       "message": "Install of {title} was interrupted; it is picked up again when the integration is set up"
     },
     "install_failed": {
-      "message": "Install of {title} failed at {stage}: {error}"
+      "message": "Install of {title} failed in stage \"{stage}\": {error}"
     },
     "install_failed_device_offline": {
       "message": "Install of {title} failed: device offline"

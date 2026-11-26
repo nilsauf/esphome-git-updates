@@ -115,7 +115,7 @@ async def test_a_yaml_edited_since_the_pre_install_read_fails_the_install_before
 
     with pytest.raises(
         HomeAssistantError,
-        match=rf"failed at update YAML: {CONFIGURATION} changed since it was read",
+        match=rf"failed in stage \"update YAML\": {CONFIGURATION} changed since it was read",
     ):
         await press_install(hass)
 
@@ -137,7 +137,7 @@ async def test_a_failed_compile_keeps_the_rewritten_yaml_and_a_retry_does_not_re
 ) -> None:
     await set_up(hass, builder)
 
-    with pytest.raises(HomeAssistantError, match="failed at compile"):
+    with pytest.raises(HomeAssistantError, match='failed in stage "compile"'):
         await install(hass, builder, "install_compile_failed")
 
     assert builder.files[CONFIGURATION] == _moved(marsrelay.url, "v1.4.0", "v1.5.0")

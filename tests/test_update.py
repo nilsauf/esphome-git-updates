@@ -425,7 +425,7 @@ async def test_a_device_builder_that_answers_an_install_unexpectedly_raises_a_re
     transcript = queue_install("c1", "u1")
     fake.transcript = [*transcript[:2], {"dir": "in", "frame": {"message_id": "1", "result": "?"}}]
 
-    with pytest.raises(HomeAssistantError, match="failed at compile"):
+    with pytest.raises(HomeAssistantError, match='failed in stage "compile"'):
         await _install(hass)
 
     issue = issue_registry.async_get_issue(DOMAIN, protocol_issue_id(entry.entry_id))
@@ -454,7 +454,7 @@ async def test_a_failed_compile_notifies_with_the_stage_error_and_log_tail_and_r
         "error": "compile failed (exit code 1)",
     }
     assert str(failed.value) == (
-        "Install of host-node failed at compile: compile failed (exit code 1)"
+        'Install of host-node failed in stage "compile": compile failed (exit code 1)'
     )
 
     assert fake.mismatches == []
