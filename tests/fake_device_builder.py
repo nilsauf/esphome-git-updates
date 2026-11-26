@@ -11,7 +11,9 @@ it is the same command with the same args (a recorded "REDACTED", which the
 CLI writes in place of credentials, matches any value). Message ids are remapped, so a
 replay does not depend on the client numbering its messages the same way.
 A mismatch closes the connection and is recorded in `mismatches`. A
-`{"dir": "close"}` entry makes the server drop the connection at that point.
+`{"dir": "close"}` entry makes the server drop the connection at that point,
+and a `{"dir": "raw", "data": ...}` entry sends *data* as it is: a str as a
+text message (so it need not be JSON), bytes as a binary one.
 
 The server answers `devices/get_config` from `files` (path -> raw YAML),
 the way the Device Builder reads its config directory, at any point: reads
@@ -169,6 +171,10 @@ class FakeDeviceBuilder:
                 self.finished = True
                 await ws.close()
                 return ws
+            if entry["dir"] == "raw":
+                data = entry["data"]
+                await (ws.send_bytes(data) if isinstance(data, bytes) else ws.send_str(data))
+                continue
             frame = entry["frame"]
             if entry["dir"] == "in":
                 if "message_id" in frame:
