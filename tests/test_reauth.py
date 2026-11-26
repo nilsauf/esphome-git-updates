@@ -159,3 +159,54 @@ async def test_successful_reauth_saves_the_credentials_reloads_and_recovers_the_
     attempts = fake.connections
     await tick(hass, freezer, 5.1)
     assert fake.connections > attempts
+
+
+@pytest.mark.parametrize(
+    ("transcript", "error"),
+    [
+        ([server_info("2.0.0", requires_auth=True)], "unsupported_version"),
+        ([{"dir": "close"}], "cannot_connect"),
+    ],
+)
+async def test_reauth_reports_a_device_builder_it_cannot_log_in_to_and_keeps_the_credentials(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    reauth_started: ReauthStarted,
+    transcript: Transcript,
+    error: str,
+) -> None:
+    entry, fake, flow_id = reauth_started
+    fake.transcript = transcript
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"username": "admin2", "password": "new-secret"}
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm"
+    assert result["errors"] == {"base": error}
+    assert entry.data["username"] == "admin"
+    assert entry.data["password"] == "secret"
+    await _assert_polling_paused(hass, fake, freezer)
+
+
+async def test_reauth_succeeds_once_the_device_builder_is_reachable_again(
+    hass: HomeAssistant, reauth_started: ReauthStarted
+) -> None:
+    entry, fake, flow_id = reauth_started
+    fake.transcript = [{"dir": "close"}]
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"username": "admin2", "password": "new-secret"}
+    )
+    assert result["errors"] == {"base": "cannot_connect"}
+
+    fake.transcript = _login()
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {"username": "admin2", "password": "new-secret"}
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert entry.data["password"] == "new-secret"
+    assert entry.state is ConfigEntryState.LOADED
