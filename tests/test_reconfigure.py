@@ -288,7 +288,7 @@ async def _reconfigure_to(hass: HomeAssistant, entry: MockConfigEntry, **locatio
 
 @reloads
 async def test_moving_the_device_builder_keeps_the_entity_and_the_installed_record(
-    hass: HomeAssistant, entity_registry: er.EntityRegistry
+    hass: HomeAssistant, entity_registry: er.EntityRegistry, caplog: pytest.LogCaptureFixture
 ) -> None:
     await record_an_install(hass, "tracked", "2026.10.0")
     async with serve([server_info(esphome_version="2026.10.1")], FILES) as (_, old):
@@ -302,6 +302,8 @@ async def test_moving_the_device_builder_keeps_the_entity_and_the_installed_reco
         new.transcripts = [_listing(), [server_info(esphome_version="2026.10.1")]]
         await _reconfigure_to(hass, entry, url=url)
 
+        # Saving schedules the reload itself, the way Home Assistant expects.
+        assert "update listener" not in caplog.text
         assert new.mismatches == []
         assert entry.state is ConfigEntryState.LOADED
         assert entity_registry.async_get(ENTITY_ID) == before

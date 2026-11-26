@@ -6,7 +6,7 @@ import logging
 from collections.abc import Mapping
 from datetime import timedelta
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -113,16 +113,20 @@ class GitSourcesCoordinator(DataUpdateCoordinator[Snapshot]):
             raise _refused(title, plan_or_refusal.translation_key, plan_or_refusal.placeholders)
         return plan_or_refusal
 
-    async def async_set_poll_interval(self, interval: timedelta) -> None:
+    @callback
+    def async_set_poll_interval(self, interval: timedelta) -> None:
         """Poll every *interval* from now on, starting with a poll right away.
 
         The poll already scheduled would otherwise still come after the old
-        interval; a refresh schedules the next one after the new interval.
+        interval; a refresh schedules the next one after the new interval. It
+        runs as a task, so it sees the options being saved with the interval.
         """
         if interval == self.update_interval:
             return
         self.update_interval = interval
-        await self.async_refresh()
+        self.config_entry.async_create_task(
+            self.hass, self.async_refresh(), f"{self.name} poll interval changed"
+        )
 
     async def async_compare_changed(self) -> None:
         """Ask GitHub again for any change whose comparison is missing."""

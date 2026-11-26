@@ -147,6 +147,34 @@ async def test_a_github_token_set_without_reloading_the_entry_is_sent_with_the_n
     assert fake_github.authorizations == [None, "Bearer ghp_secret"]
 
 
+async def test_a_github_token_saved_with_a_new_git_poll_interval_is_sent_with_the_poll_right_away(
+    hass: HomeAssistant,
+    builder: FakeDeviceBuilder,
+    fake_github: FakeGitHub,
+    marsrelay: GitRepo,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    entry = await set_up(hass, builder)
+    marsrelay.push()
+    await tick(hass, freezer, 30.1)
+    assert fake_github.authorizations == [None]
+    marsrelay.push()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "clean_build": False,
+            "git_poll_interval": 5,
+            "upload_address": "OTA",
+            "github_token": "ghp_secret",
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert fake_github.authorizations == [None, "Bearer ghp_secret"]
+
+
 async def test_opening_release_notes_asks_github_again_for_a_missing_comparison(
     hass: HomeAssistant,
     builder: FakeDeviceBuilder,

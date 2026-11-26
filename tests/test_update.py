@@ -730,6 +730,28 @@ async def test_the_upload_address_override_is_the_install_port(
     assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
 
 
+async def test_clean_build_and_upload_address_changed_in_the_options_apply_to_the_next_install(
+    hass: HomeAssistant,
+    builder: tuple[str, FakeDeviceBuilder],
+) -> None:
+    url, fake = builder
+    entry = await _set_up_with_an_update(hass, url)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {"clean_build": True, "git_poll_interval": 30, "upload_address": "192.168.1.42"},
+    )
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.LOADED
+    fake.transcript = install_transcript("install_clean_success", clean={}, port="192.168.1.42")
+
+    await _install(hass)
+
+    assert fake.mismatches == []
+    assert fake.finished
+    assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
+
+
 async def test_an_install_re_attached_during_its_clean_build_uploads_where_it_was_started_for(
     hass: HomeAssistant,
     builder: tuple[str, FakeDeviceBuilder],

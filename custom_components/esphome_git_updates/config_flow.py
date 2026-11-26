@@ -10,6 +10,7 @@ from typing import Any
 import probatio
 from homeassistant.config_entries import (
     SOURCE_RECONFIGURE,
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlow,
@@ -57,6 +58,7 @@ from .options import (
     DEFAULT_CLEAN_BUILD,
     DEFAULT_GIT_POLL_INTERVAL,
     DEFAULT_UPLOAD_ADDRESS,
+    Options,
 )
 
 ADDON_SCHEMA = probatio.Schema(
@@ -352,16 +354,21 @@ class EsphomeGitUpdatesOptionsFlow(OptionsFlow):
         """Show the options, filled in with the ones set."""
         if user_input is not None:
             token = user_input.pop(CONF_GITHUB_TOKEN, "").strip()
-            return self.async_create_entry(
-                data={
-                    **user_input,
-                    **({CONF_GITHUB_TOKEN: token} if token else {}),
-                    # The number selector gives a float; the interval is whole minutes.
-                    CONF_GIT_POLL_INTERVAL: int(user_input[CONF_GIT_POLL_INTERVAL]),
-                    CONF_UPLOAD_ADDRESS: user_input[CONF_UPLOAD_ADDRESS].strip()
-                    or DEFAULT_UPLOAD_ADDRESS,
-                }
-            )
+            options = {
+                **user_input,
+                **({CONF_GITHUB_TOKEN: token} if token else {}),
+                # The number selector gives a float; the interval is whole minutes.
+                CONF_GIT_POLL_INTERVAL: int(user_input[CONF_GIT_POLL_INTERVAL]),
+                CONF_UPLOAD_ADDRESS: user_input[CONF_UPLOAD_ADDRESS].strip()
+                or DEFAULT_UPLOAD_ADDRESS,
+            }
+            # Not reloaded: that would interrupt a running Install. Clean Build,
+            # the upload address and the GitHub token are read when they are used.
+            if self.config_entry.state is ConfigEntryState.LOADED:
+                self.config_entry.runtime_data.git_coordinator.async_set_poll_interval(
+                    Options.of(options).git_poll_interval
+                )
+            return self.async_create_entry(data=options)
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(
