@@ -7,13 +7,33 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from homeassistant.config_entries import SOURCE_RECONFIGURE, ConfigFlowResult
+from freezegun.api import FrozenDateTimeFactory
+from homeassistant.components import persistent_notification
+from homeassistant.config_entries import (
+    SOURCE_REAUTH,
+    SOURCE_RECONFIGURE,
+    ConfigEntryState,
+    ConfigFlowResult,
+)
+from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.esphome_git_updates.const import DOMAIN
-from fake_device_builder import Transcript, load_fixture, port_of, serve, server_info
+from fake_device_builder import (
+    FakeDeviceBuilder,
+    Transcript,
+    job_events,
+    load_fixture,
+    port_of,
+    queue_install,
+    serve,
+    server_info,
+)
+from stored_record import record_an_install, recorded_esphome_version
+from tracked_config import CONFIGURATION, ENTITY_ID, OTA, set_up, tick
 
 pytestmark = pytest.mark.usefixtures("enable_custom_integrations")
 
@@ -243,3 +263,148 @@ async def test_a_builder_that_does_not_list_the_tracked_config_is_refused(
     assert result["reason"] == "configuration_not_listed"
     assert result["description_placeholders"] == {"configuration": "host-node.yaml"}
     assert dict(entry.data) == MANUAL
+
+
+# Through a real reload of a set-up entry. Without the reload, a running Install
+# is never re-attached and waiting for it would hang: the timeout fails it instead.
+reloads = pytest.mark.timeout(10)
+
+FILES = {CONFIGURATION: f"esphome:\n  name: host-node\n{OTA}"}
+
+
+def _listing() -> Transcript:
+    """One connection that lists configurations, including the Tracked Config."""
+    return load_fixture("list")
+
+
+async def _reconfigure_to(hass: HomeAssistant, entry: MockConfigEntry, **location: str) -> None:
+    result = await _start(hass, entry)
+    assert result["step_id"] == "manual"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], location)
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+
+@reloads
+async def test_moving_the_device_builder_keeps_the_entity_and_the_installed_record(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry
+) -> None:
+    await record_an_install(hass, "tracked", "2026.10.0")
+    async with serve([server_info(esphome_version="2026.10.1")], FILES) as (_, old):
+        entry = await set_up(hass, old)
+        before = entity_registry.async_get(ENTITY_ID)
+        assert before is not None
+        assert hass.states.get(ENTITY_ID).state == STATE_ON  # type: ignore[union-attr]
+
+    # The old Device Builder is gone; a new one has the same Configuration.
+    async with serve(_listing(), FILES) as (url, new):
+        new.transcripts = [_listing(), [server_info(esphome_version="2026.10.1")]]
+        await _reconfigure_to(hass, entry, url=url)
+
+        assert new.mismatches == []
+        assert entry.state is ConfigEntryState.LOADED
+        assert entity_registry.async_get(ENTITY_ID) == before
+        state = hass.states.get(ENTITY_ID)
+        assert state is not None
+        assert state.state == STATE_ON
+        assert state.attributes["installed_version"] == "2026.10.0"
+        assert state.attributes["latest_version"] == "2026.10.1"
+        assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.0"
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+def _reauth_flows(hass: HomeAssistant) -> list[ConfigFlowResult]:
+    return [
+        flow
+        for flow in hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        if flow["context"]["source"] == SOURCE_REAUTH
+    ]
+
+
+@reloads
+async def test_reconfiguring_with_working_credentials_ends_the_reauthentication_pause(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory
+) -> None:
+    async with serve(load_fixture("auth_login_list"), FILES) as (url, fake):
+        entry = await set_up(hass, fake, username="admin", password="secret")
+        # The Device Builder starts rejecting the stored login: polling pauses.
+        fake.transcript = load_fixture("auth_login_rejected")
+        await tick(hass, freezer, 5.1)
+        assert len(_reauth_flows(hass)) == 1
+        attempts = fake.connections
+        await tick(hass, freezer, 5.1)
+        assert fake.connections == attempts
+
+        fake.transcript = load_fixture("auth_login_list")
+        await _reconfigure_to(hass, entry, url=url, username="admin2", password="new-secret")
+
+        assert fake.logins[-1] == {"username": "admin2", "password": "new-secret"}
+        assert entry.state is ConfigEntryState.LOADED
+        assert hass.states.get(ENTITY_ID).state == STATE_OFF  # type: ignore[union-attr]
+        # The stale reauthentication request is gone, and polling connects again.
+        assert _reauth_flows(hass) == []
+        attempts = fake.connections
+        await tick(hass, freezer, 5.1)
+        assert fake.connections > attempts
+        assert fake.logins[-1] == {"username": "admin2", "password": "new-secret"}
+
+
+async def _start_an_install(hass: HomeAssistant, fake: FakeDeviceBuilder) -> MockConfigEntry:
+    """An entry with an update whose Install is compiling on *fake*."""
+    await record_an_install(hass, "tracked", "2026.10.0")
+    entry = await set_up(hass, fake)
+    fake.transcript = queue_install("c1", "u1")
+    fake.jobs = {"c1": job_events("INFO Compiling", status=None)}
+    await hass.services.async_call("update", "install", {"entity_id": ENTITY_ID})
+    await fake.running.wait()
+    return entry
+
+
+def _notifications(hass: HomeAssistant) -> list[persistent_notification.Notification]:
+    return list(persistent_notification._async_get_or_create_notifications(hass).values())
+
+
+@reloads
+async def test_an_install_running_on_the_same_device_builder_is_followed_through(
+    hass: HomeAssistant,
+) -> None:
+    async with serve([server_info(esphome_version="2026.10.1")], FILES) as (url, fake):
+        entry = await _start_an_install(hass, fake)
+
+        # Saved again with the same Device Builder, which kept the jobs.
+        fake.transcripts = [_listing(), [server_info(esphome_version="2026.10.1")]]
+        fake.jobs = {"c1": job_events("INFO Compiling"), "u1": job_events("INFO OTA successful")}
+        fake.followed.clear()
+        await _reconfigure_to(hass, entry, url=url)
+
+        assert fake.mismatches == []
+        assert fake.followed == ["c1", "u1"]
+        state = hass.states.get(ENTITY_ID)
+        assert state is not None
+        assert state.state == STATE_OFF
+        assert state.attributes["in_progress"] is False
+        assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.1"
+        assert _notifications(hass) == []
+
+
+@reloads
+async def test_an_install_running_on_a_replaced_device_builder_ends_with_its_outcome_unknown(
+    hass: HomeAssistant,
+) -> None:
+    async with serve([server_info(esphome_version="2026.10.1")], FILES) as (_, old):
+        entry = await _start_an_install(hass, old)
+
+        async with serve(_listing(), FILES) as (url, new):
+            new.transcripts = [_listing(), [server_info(esphome_version="2026.10.1")]]
+            await _reconfigure_to(hass, entry, url=url)
+
+            assert new.followed == ["c1"]
+            state = hass.states.get(ENTITY_ID)
+            assert state is not None
+            assert state.state == STATE_ON
+            assert state.attributes["in_progress"] is False
+            assert await recorded_esphome_version(hass, entry.entry_id) == "2026.10.0"
+            [notification] = _notifications(hass)
+            assert "unknown" in str(notification["title"]).lower()
+            assert await hass.config_entries.async_unload(entry.entry_id)
