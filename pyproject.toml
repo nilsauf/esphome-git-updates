@@ -52,6 +52,7 @@ files = [
     "tests/test_module_coverage.py",
     "tests/test_packaging.py",
     "tests/test_pre_install_checks.py",
+    "tests/test_quality_scale.py",
     "tests/test_progress.py",
     "tests/test_reauth.py",
     "tests/test_release_notes.py",
