@@ -24,7 +24,7 @@ DEFAULT_ADDON_SLUG: Final = "5c53de3b_esphome"
 
 
 class DeviceBuilderNotFound(DeviceBuilderError):
-    """The Supervisor does not know the add-on with the stored slug."""
+    """The Supervisor does not know the add-on with the given slug."""
 
 
 def is_manual_location(location: Mapping[str, Any]) -> bool:
