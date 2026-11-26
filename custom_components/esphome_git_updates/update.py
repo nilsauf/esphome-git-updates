@@ -48,6 +48,10 @@ class TrackedConfigUpdate(CoordinatorEntity[EsphomeVersionCoordinator], UpdateEn
 
     _attr_has_entity_name = True
     _attr_device_class = UpdateDeviceClass.FIRMWARE
+    # The key of the icon definitions in icons.json. strings.json deliberately
+    # has no name for it: unnamed, the entity is named by its device class,
+    # which the update component translates into every language HA ships.
+    _attr_translation_key = "firmware"
     # PROGRESS so that in_progress is the entity's own: a re-attached Install
     # runs outside async_install, and both set update_percentage (ticket 14).
     _attr_supported_features = (
