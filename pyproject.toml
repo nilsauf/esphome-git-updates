@@ -23,7 +23,7 @@ src = [".", "custom_components/esphome_git_updates", "scripts", "tests"]
 # `device_builder.py` has two module names: the integration imports it as part
 # of the package, and the standalone CLI (plus its tests) as top-level
 # `device_builder`. mypy can only check one of them per run, so this config
-# checks the integration; check the spike with:
+# checks the integration, and CI checks the standalone CLI separately with:
 #   MYPYPATH=custom_components/esphome_git_updates:scripts:tests mypy --config-file /dev/null \
 #     --strict scripts/device_builder_cli.py tests/test_cli.py tests/test_device_builder.py
 strict = true
