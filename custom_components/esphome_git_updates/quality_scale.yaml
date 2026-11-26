@@ -1,0 +1,130 @@
+rules:
+  # Bronze
+  action-setup:
+    status: exempt
+    comment: The integration registers no actions.
+  appropriate-polling:
+    status: done
+    comment: >
+      The ESPHome version is polled every 5 minutes; the Git Sources at the
+      configurable interval, 30 minutes by default.
+  brands:
+    status: exempt
+    comment: >
+      A custom integration: its brand assets ship in its own brand/ directory,
+      which HACS reads. The brands repository takes core integrations.
+  common-modules:
+    status: done
+    comment: >
+      The coordinators live in coordinator.py and git_coordinator.py; the
+      Device Builder client in device_builder.py is shared with the standalone CLI.
+  config-flow: done
+  config-flow-test-coverage: done
+  dependency-transparency:
+    status: done
+    comment: No requirements beyond Home Assistant itself.
+  docs-actions:
+    status: exempt
+    comment: The integration registers no actions.
+  docs-conditions:
+    status: exempt
+    comment: The integration provides no conditions.
+  docs-high-level-description: done
+  docs-installation-instructions: done
+  docs-removal-instructions: done
+  docs-triggers:
+    status: exempt
+    comment: The integration provides no triggers.
+  entity-event-setup:
+    status: done
+    comment: >
+      The Linked Device registry listener and the Git Sources listener are
+      subscribed in async_added_to_hass and removed with async_on_remove.
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data: done
+  test-before-configure: done
+  test-before-setup: done
+  unique-config-entry:
+    status: done
+    comment: The Configuration is the entry's unique id.
+
+  # Silver
+  action-exceptions:
+    status: exempt
+    comment: The integration registers no actions.
+  config-entry-unloading: done
+  docs-configuration-parameters: done
+  docs-installation-parameters: done
+  entity-unavailable: done
+  integration-owner: done
+  log-when-unavailable: done
+  parallel-updates: done
+  reauthentication-flow: done
+  test-coverage:
+    status: done
+    comment: CI fails when any module of the integration falls below 95% coverage.
+
+  # Gold
+  devices: done
+  diagnostics: done
+  discovery:
+    status: exempt
+    comment: >
+      The Device Builder is not discoverable on the network; the user gives
+      its location, or picks the ESPHome add-on found through the Supervisor.
+  discovery-update-info:
+    status: exempt
+    comment: The integration has no discovery.
+  docs-data-update: done
+  docs-examples: done
+  docs-known-limitations: done
+  docs-supported-devices: done
+  docs-supported-functions: done
+  docs-troubleshooting: done
+  docs-use-cases: done
+  dynamic-devices:
+    status: exempt
+    comment: >
+      Each config entry tracks one Configuration with one device and one
+      update entity; no devices appear or go away while it runs.
+  entity-category:
+    status: exempt
+    comment: >
+      The only entity is the update entity, the integration's primary
+      function; it is neither a configuration nor a diagnostic entity.
+  entity-device-class: done
+  entity-disabled-by-default:
+    status: exempt
+    comment: The only entity is the update entity, which must be enabled to be of use.
+  entity-translations:
+    status: done
+    comment: >
+      The entity has no hardcoded name; it takes the firmware device class
+      name, which the update component translates.
+  exception-translations:
+    status: done
+    comment: >
+      Every refusal and failure of an Install carries a translation key and
+      placeholders.
+  icon-translations: done
+  reconfiguration-flow: done
+  repair-issues: done
+  stale-devices:
+    status: done
+    comment: >
+      The only device the integration creates is the entry's own, removed
+      with the entry; a Linked Device belongs to the ESPHome integration.
+
+  # Platinum
+  async-dependency:
+    status: exempt
+    comment: The integration has no external library; it talks to the Device Builder with aiohttp.
+  inject-websession:
+    status: done
+    comment: The Device Builder client and the GitHub client use Home Assistant's shared aiohttp session.
+  strict-typing:
+    status: done
+    comment: >
+      mypy --strict covers the integration and, in a second CI run, the
+      standalone CLI. A custom integration is not on core's .strict-typing list.

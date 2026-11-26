@@ -1,6 +1,6 @@
 [project]
 name = "esphome-git-updates"
-version = "0.4.0"
+version = "0.5.0"
 requires-python = ">=3.13"
 dependencies = ["aiohttp>=3.9"]
 
@@ -52,6 +52,7 @@ files = [
     "tests/test_module_coverage.py",
     "tests/test_packaging.py",
     "tests/test_pre_install_checks.py",
+    "tests/test_quality_scale.py",
     "tests/test_progress.py",
     "tests/test_reauth.py",
     "tests/test_release_notes.py",
