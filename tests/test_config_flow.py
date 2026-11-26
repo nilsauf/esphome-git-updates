@@ -82,27 +82,22 @@ async def test_a_non_standard_add_on_slug_can_be_given(
     assert result["data"] == {"addon_slug": "local_esphome", "configuration": "host-node.yaml"}
 
 
-def _core_esphome_knows_device_builder(hass: HomeAssistant, url: str) -> None:
-    """Stand in for core's esphome integration having discovered a Device Builder at *url*."""
-    dashboard = SimpleNamespace(addon_slug="5c53de3b_esphome", url=url)
-    hass.data["esphome_dashboard_manager"] = SimpleNamespace(async_get=lambda: dashboard)
-
-
-async def test_without_the_add_on_the_device_builder_core_esphome_discovered_is_used(
-    hass: HomeAssistant, supervisor: MagicMock
-) -> None:
-    async with serve(load_fixture("list")) as (url, fake):
-        _core_esphome_knows_device_builder(hass, url)
-        result = await _start_addon(hass)
-
-    assert fake.mismatches == []
-    assert result["step_id"] == "configuration"
-
-
-async def test_neither_the_add_on_nor_a_discovered_device_builder_is_reported(
-    hass: HomeAssistant, supervisor: MagicMock
-) -> None:
+async def test_a_missing_add_on_is_reported(hass: HomeAssistant, supervisor: MagicMock) -> None:
     result = await _start_addon(hass)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "addon"
+    assert result["errors"] == {"base": "addon_not_found"}
+
+
+async def test_a_missing_add_on_is_reported_even_if_core_esphome_knows_a_device_builder(
+    hass: HomeAssistant, supervisor: MagicMock
+) -> None:
+    """Core esphome's hass.data is its internal state, not an API (HACS review)."""
+    async with serve(load_fixture("list")) as (url, _):
+        device_builder = SimpleNamespace(addon_slug="5c53de3b_esphome", url=url)
+        hass.data["esphome_dashboard_manager"] = SimpleNamespace(async_get=lambda: device_builder)
+        result = await _start_addon(hass)
 
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "addon"

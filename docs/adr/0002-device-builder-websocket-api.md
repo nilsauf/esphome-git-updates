@@ -1,6 +1,8 @@
 # Build through the Device Builder `/ws` API, in-process
 
-Installs are driven from inside Home Assistant as background tasks talking to the Device Builder's multiplexed `/ws` API (`firmware/clean`, `firmware/install`, `firmware/follow_job`). The add-on is located through the Supervisor's ingress port, with a manual URL plus credentials as an alternative for dev setups and non-Supervisor installs. If the Supervisor can't find the add-on, the integration falls back to the Device Builder URL that core's `esphome` integration discovered.
+Installs are driven from inside Home Assistant as background tasks talking to the Device Builder's multiplexed `/ws` API (`firmware/clean`, `firmware/install`, `firmware/follow_job`). The add-on is located only through the Supervisor's ingress port; if the Supervisor can't find it, the user is pointed to a manual URL plus credentials, which is also the alternative for dev setups and non-Supervisor installs.
+
+An earlier fallback to the Device Builder URL that core's `esphome` integration discovered was removed after the HACS review (2026-11-26): it read core ESPHome's internal `hass.data`, which is not an API.
 
 ## Considered Options
 

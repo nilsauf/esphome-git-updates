@@ -19,7 +19,7 @@
       },
       "addon": {
         "title": "ESPHome Add-on",
-        "description": "Das ESPHome Add-on dieses Home Assistant verwenden. Wird es über seinen Slug nicht gefunden, wird der Device Builder verwendet, den die ESPHome-Integration von Home Assistant gefunden hat.",
+        "description": "Das ESPHome Add-on dieses Home Assistant verwenden, gefunden über seinen Slug beim Supervisor.",
         "data": {
           "addon_slug": "Add-on-Slug"
         },
@@ -69,7 +69,7 @@
       }
     },
     "error": {
-      "addon_not_found": "Weder das ESPHome Add-on mit diesem Slug noch ein von der ESPHome-Integration von Home Assistant gefundener Device Builder wurde gefunden.",
+      "addon_not_found": "Kein ESPHome Add-on mit diesem Slug gefunden. Prüfe den Slug oder wähle stattdessen „Manuelle URL“.",
       "cannot_connect": "Verbindung zum Device Builder fehlgeschlagen.",
       "invalid_auth": "Der Device Builder hat den Benutzernamen oder das Passwort abgelehnt.",
       "unsupported_version": "Diese Version des Device Builders wird nicht unterstützt.",

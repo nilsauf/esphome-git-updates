@@ -19,7 +19,7 @@
       },
       "addon": {
         "title": "ESPHome add-on",
-        "description": "Use the ESPHome add-on on this Home Assistant. If it can't be found by its slug, the Device Builder that Home Assistant's ESPHome integration discovered is used.",
+        "description": "Use the ESPHome add-on on this Home Assistant, found by its slug through the Supervisor.",
         "data": {
           "addon_slug": "Add-on slug"
         },
@@ -69,7 +69,7 @@
       }
     },
     "error": {
-      "addon_not_found": "Neither the ESPHome add-on with this slug nor a Device Builder discovered by Home Assistant's ESPHome integration was found.",
+      "addon_not_found": "No ESPHome add-on with this slug was found. Check the slug, or choose \"Manual URL\" instead.",
       "cannot_connect": "Could not connect to the Device Builder.",
       "invalid_auth": "The Device Builder refused the username or password.",
       "unsupported_version": "This Device Builder version is not supported.",

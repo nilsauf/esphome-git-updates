@@ -28,7 +28,7 @@ Go to **Settings → Devices & services → Add integration** and pick **ESPHome
 On a Home Assistant install with Supervisor, setup first asks where the Device Builder runs:
 
 - **ESPHome add-on (auto)**: use the ESPHome add-on on this Home Assistant. The integration finds it through Supervisor and talks to it on its internal (ingress) port, so no login is needed. It asks for one field:
-  - **Add-on slug** (required, default `5c53de3b_esphome`, the ESPHome add-on from the official ESPHome add-on repository). Change it only if your ESPHome add-on comes from another repository; its slug is the last part of the add-on page's address in Home Assistant (`/hassio/addon/<slug>`). If no add-on with this slug is found, the integration uses the Device Builder that Home Assistant's own ESPHome integration discovered instead, and refuses only if there is neither.
+  - **Add-on slug** (required, default `5c53de3b_esphome`, the ESPHome add-on from the official ESPHome add-on repository). Change it only if your ESPHome add-on comes from another repository; its slug is the last part of the add-on page's address in Home Assistant (`/hassio/addon/<slug>`). If no add-on with this slug is found, setup refuses it; check the slug, or choose **Manual URL** instead.
 - **Manual URL**: enter where the Device Builder runs. Use this for a standalone `esphome dashboard`, or a Device Builder on another machine.
 
 Without Supervisor, setup goes straight to the **Manual URL** form:
