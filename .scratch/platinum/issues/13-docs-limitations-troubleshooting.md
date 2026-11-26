@@ -8,10 +8,14 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Each limitation above is stated, with what the user can do about it where there is something to do.
 - [ ] The Configuration requirements are stated as requirements, not as examples only.
 - [ ] Every Repair issue the integration raises is listed with its user-facing cause and fix.
 - [ ] Diagnostics are mentioned with what they contain and what is redacted.
 - [ ] No documented behaviour contradicts the code or the Repair issue strings.
+
+## Comments
+
+Implemented and merged into `quality-scale-platinum` (2026-11-26), followed by the code-review fixes merge.

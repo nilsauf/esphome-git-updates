@@ -13,7 +13,7 @@ A Linked Device is not modified: ESPHome or MQTT owns it. The entity only pins i
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The device created for an entry without a Linked Device has manufacturer `ESPHome`, the Configuration as model, and the Installed ESPHome Version as its software version.
 - [ ] Its configuration URL is the manual Device Builder address without credentials, and is absent for an add-on location.
@@ -21,3 +21,7 @@ A Linked Device is not modified: ESPHome or MQTT owns it. The entity only pins i
 - [ ] After a reconfigure, the configuration URL reflects the new location (the reload re-registers the device).
 - [ ] A test asserts the registry fields for the own-device case, and asserts that a Linked Device's entry is unchanged.
 - [ ] No change to the entity's versions, availability or device association.
+
+## Comments
+
+Implemented and merged into `quality-scale-platinum` (2026-11-26), followed by the code-review fixes merge.

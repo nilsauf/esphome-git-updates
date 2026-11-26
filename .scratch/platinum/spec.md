@@ -1,6 +1,6 @@
 # Quality scale platinum: spec
 
-Status: ready-for-agent
+Status: resolved
 
 Terms are defined in `GLOSSARY.md`. Relevant decisions: ADR-0001 (one config entry per Tracked Config), ADR-0002 (an Install is followed through the Device Builder and re-attached after a restart), ADR-0003 (the Installed Record owns what the integration remembers), ADR-0005 (one combined entity, on the Linked Device when there is one), ADR-0006 (raw YAML, read through the Device Builder), ADR-0007 (Install rewrites Tag Refs).
 

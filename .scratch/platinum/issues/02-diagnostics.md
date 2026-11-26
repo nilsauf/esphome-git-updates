@@ -6,7 +6,7 @@ The download must work while the Device Builder is unreachable: it reads in-memo
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] A diagnostics module serves the entry's diagnostics through Home Assistant's diagnostics platform, with the typed config entry.
 - [ ] Username, password and GitHub token are replaced by a redaction marker; a manual Device Builder URL is reduced to scheme, host and port. No credential or URL userinfo appears anywhere in the download.
@@ -15,3 +15,7 @@ The download must work while the Device Builder is unreachable: it reads in-memo
 - [ ] The Installed Record gains a read-only snapshot method for this; diagnostics does not read its stored layout.
 - [ ] A test downloads the diagnostics through the config-entry diagnostics helper and asserts the payload's shape and that a known secret value does not appear anywhere in the JSON.
 - [ ] The same test passes with the Device Builder stopped, and the diagnostics still show the last polled state.
+
+## Comments
+
+Implemented and merged into `quality-scale-platinum` (2026-11-26), followed by the code-review fixes merge.

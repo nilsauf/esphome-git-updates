@@ -11,10 +11,14 @@ Write for a user who has just installed it: no internal vocabulary that the glos
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Every field asked during setup is documented, including what is optional and what the default is.
 - [ ] Every option is documented with what it does and its default.
 - [ ] The reconfigure flow is documented, including switching modes.
 - [ ] Removal is documented, including what data goes with the entry.
 - [ ] The text matches the implemented flows; a reader can follow it without opening the code.
+
+## Comments
+
+Implemented and merged into `quality-scale-platinum` (2026-11-26), followed by the code-review fixes merge.

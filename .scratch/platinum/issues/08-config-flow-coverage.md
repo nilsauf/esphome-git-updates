@@ -4,8 +4,12 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The config flow module reports full coverage.
 - [ ] Tests cover, through the flow: reauthentication succeeding, invalid auth, unsupported version and cannot-connect; setup aborting when the Device Builder lists no configurations; and every reconfigure error path from ticket 03 (each connection error and the wrong-configuration abort).
 - [ ] No test reaches into flow internals; assertions are on flow results, entry data and entry state.
+
+## Comments
+
+Implemented and merged into `quality-scale-platinum` (2026-11-26), followed by the code-review fixes merge.

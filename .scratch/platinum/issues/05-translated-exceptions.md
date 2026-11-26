@@ -13,7 +13,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `Refusal` is a translation key plus placeholders, with no prose; `following` still imports nothing from Home Assistant.
 - [ ] The pre-install check returns a refusal for a missing `ota:` platform and for a Git Source without `refresh: always`, and both are raised as a translated error naming the same details as before.
@@ -22,3 +22,7 @@
 - [ ] All new keys exist in `strings.json` and `translations/en.json`.
 - [ ] Existing tests that asserted refusal prose now assert the key and placeholders; new tests cover each ending type through the install action.
 - [ ] Notification text is byte-for-byte unchanged.
+
+## Comments
+
+Implemented and merged into `quality-scale-platinum` (2026-11-26), followed by the code-review fixes merge.

@@ -6,10 +6,14 @@ Give the entity that translation key, matching the key its icon definitions alre
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The update entity sets a translation key equal to the key in the integration's icon definitions.
 - [ ] `strings.json` and `translations/en.json` gain no name for that key (this is deliberate; a comment in the code says why).
 - [ ] The entity registry entry for the update entity has that translation key.
 - [ ] The entity's friendly name and entity id are unchanged (`<device> Firmware`, `update.<device>_firmware`).
 - [ ] A test asserts the registry's translation key and that the icon-definition file has an entry for that key, so the pairing cannot silently break.
+
+## Comments
+
+Implemented and merged into `quality-scale-platinum` (2026-11-26), followed by the code-review fixes merge.

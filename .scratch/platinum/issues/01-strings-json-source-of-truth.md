@@ -4,9 +4,13 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `strings.json` exists and its content equals `translations/en.json`.
 - [ ] A packaging-style test loads both files and asserts they parse to the same object, so formatting differences do not matter and a missing key does.
 - [ ] The test fails when a key is added to one file only (checked by running it against a deliberately diverged copy, then reverting).
 - [ ] No change to any string's text, and no change to how Home Assistant reads translations at runtime.
+
+## Comments
+
+Implemented and merged into `quality-scale-platinum` (2026-11-26), followed by the code-review fixes merge.

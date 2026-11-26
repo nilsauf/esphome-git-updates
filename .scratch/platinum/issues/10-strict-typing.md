@@ -9,9 +9,13 @@ Annotate the options flow and its entry point with the integration's typed confi
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The options flow and `async_get_options_flow` use the integration's typed config entry.
 - [ ] The main mypy run stays green, and includes the diagnostics module added in ticket 02.
 - [ ] CI runs the separate strict mypy invocation over the standalone CLI and the tests that import the shared Device Builder module, and it is green.
 - [ ] No `Any` is introduced to make either check pass; the configuration is the same strictness the project already uses.
+
+## Comments
+
+Implemented and merged into `quality-scale-platinum` (2026-11-26), followed by the code-review fixes merge.

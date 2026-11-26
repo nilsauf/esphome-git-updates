@@ -15,7 +15,7 @@ The test asserts: every rule is present exactly once and no unknown rule is pres
 
 **Blocked by:** 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The manifest declares the Platinum tier and keeps the code owner.
 - [ ] `quality_scale.yaml` lists all 54 rules with a status, and a comment on every exemption.
@@ -23,3 +23,7 @@ The test asserts: every rule is present exactly once and no unknown rule is pres
 - [ ] The guard test passes, and fails when a rule is removed, a `done` rule loses its evidence, an exemption loses its reason, or the manifest tier changes without the file.
 - [ ] The full test suite, strict mypy (both invocations), ruff and the per-module coverage check are green.
 - [ ] The version is bumped in the manifest and the project file, ready for the existing release steps.
+
+## Comments
+
+Implemented and merged into `quality-scale-platinum` (2026-11-26), followed by the code-review fixes merge.

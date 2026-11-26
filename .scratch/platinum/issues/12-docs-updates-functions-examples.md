@@ -9,10 +9,14 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Polling intervals, what triggers each poll, and the effect of an unreachable Device Builder are documented.
 - [ ] Every entity and action the integration provides is documented, with the attributes that matter (installed and latest version, release summary and notes, progress).
 - [ ] At least three use cases are described in the integration's own terms.
 - [ ] At least one automation example is valid YAML for the documented entity and actions, and one covers reacting to an Install.
 - [ ] No documented behaviour contradicts the code.
+
+## Comments
+
+Implemented and merged into `quality-scale-platinum` (2026-11-26), followed by the code-review fixes merge.

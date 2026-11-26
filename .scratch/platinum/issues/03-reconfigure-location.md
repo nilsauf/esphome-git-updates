@@ -8,7 +8,7 @@ Apply the change with a reload. The reload is what clears the entry's reauthenti
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The config flow has a reconfigure step reachable from the entry, showing the add-on / manual menu with the current mode's values pre-filled.
 - [ ] Each mode's form is the setup flow's form, with that flow's connection errors (`cannot_connect`, `invalid_auth`, `unsupported_version`, `addon_not_found`) reported in place.
@@ -19,3 +19,7 @@ Apply the change with a reload. The reload is what clears the entry's reauthenti
 - [ ] A running Install survives the reload: it is followed through when the same builder still has its jobs, and reported as an unknown outcome when it does not.
 - [ ] The abort reason and any new strings exist in `strings.json` and `translations/en.json`.
 - [ ] Tests cover: each mode, switching modes in either direction, each connection error, the wrong-configuration abort, and the reauth interaction.
+
+## Comments
+
+Implemented and merged into `quality-scale-platinum` (2026-11-26), followed by the code-review fixes merge.
