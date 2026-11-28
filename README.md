@@ -10,14 +10,41 @@ Terms used here (Tracked Config, Git Source, Floating Ref, Tag Ref, Unset Ref, V
 - An ESPHome Device Builder: the ESPHome add-on or a standalone `esphome dashboard`.
 - For the **ESPHome add-on (auto)** choice during setup: a Home Assistant install with Supervisor.
 
-## Install with HACS
+## Installation
 
-1. In HACS, open the menu (⋮) → **Custom repositories**.
-2. Add `https://github.com/nilsauf/esphome-git-updates` with type **Integration**.
-3. Search HACS for **ESPHome Git Updates**, download it, and restart Home Assistant.
+### Marketplace (Home Assistant 2026.11 and later)
+
+[![Open your Home Assistant instance and open this repository in the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=nilsauf&repository=esphome-git-updates&category=integration)
+
+From Home Assistant 2026.11, HACS is built into Home Assistant as the Marketplace. ESPHome Git Updates is available in the Marketplace catalog.
+
+1. Open **Settings → Marketplace** and search for **ESPHome Git Updates**, or use the button above.
+2. If this is your first time using the Marketplace, read and accept the notice.
+3. Select **ESPHome Git Updates** and choose **Install**.
 4. Set it up as described under [Setup](#setup).
 
-HACS offers new versions of the integration itself as they are released.
+If you installed ESPHome Git Updates through HACS before, Home Assistant moves it into the Marketplace when you upgrade to 2026.11; you do not need to reinstall.
+
+### HACS (Home Assistant 2026.10)
+
+[![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=nilsauf&repository=esphome-git-updates&category=integration)
+
+ESPHome Git Updates is part of the HACS default repositories, so you do not need to add it as a custom repository.
+
+1. Open **HACS** and search for **ESPHome Git Updates**, or use the button above.
+2. Select **Download**.
+3. Restart Home Assistant.
+4. Set it up as described under [Setup](#setup).
+
+If you added `https://github.com/nilsauf/esphome-git-updates` as a custom repository before, you can remove it from HACS's **Custom repositories**; the integration stays installed.
+
+The Marketplace and HACS offer new versions of the integration itself as they are released.
+
+### Manual
+
+1. Copy `custom_components/esphome_git_updates` into your Home Assistant `config/custom_components` directory.
+2. Restart Home Assistant.
+3. Set it up as described under [Setup](#setup).
 
 ## Setup
 
@@ -90,9 +117,8 @@ Nothing outside Home Assistant is changed: the Configuration's YAML stays on the
 To remove the integration itself:
 
 1. Delete every ESPHome Git Updates entry as above.
-2. In HACS, find **ESPHome Git Updates**, open its menu (⋮) and choose **Remove**.
+2. Uninstall **ESPHome Git Updates** from **Settings → Marketplace** (or, on 2026.10, in HACS open its menu (⋮) and choose **Remove**). For a manual install, delete `custom_components/esphome_git_updates` from the configuration directory.
 3. Restart Home Assistant.
-4. Optionally, remove `https://github.com/nilsauf/esphome-git-updates` from HACS's **Custom repositories**.
 
 ## Requirements on the Configuration
 
